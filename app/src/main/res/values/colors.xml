@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Light theme colors -->
+    <color name="light_background">#FFFFFF</color>
+    <color name="light_surface">#F8F9FA</color>
+    <color name="light_text_primary">#1C1C1E</color>
+    <color name="light_text_secondary">#8E8E93</color>
+    <color name="light_user_bubble">#007AFF</color>
+    <color name="light_ai_bubble">#F1F1F1</color>
+    <color name="light_input_background">#F0F0F0</color>
+    
+    <!-- Dark theme colors -->
+    <color name="dark_background">#000000</color>
+    <color name="dark_surface">#1C1C1E</color>
+    <color name="dark_text_primary">#FFFFFF</color>
+    <color name="dark_text_secondary">#8E8E93</color>
+    <color name="dark_user_bubble">#007AFF</color>
+    <color name="dark_ai_bubble">#2C2C2E</color>
+    <color name="dark_input_background">#2C2C2E</color>
+</resources>

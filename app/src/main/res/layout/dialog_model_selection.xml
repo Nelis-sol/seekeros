@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="24dp"
+    android:background="@android:color/white">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Choose Your AI Model"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        android:textColor="#1C1C1E"
+        android:gravity="center"
+        android:layout_marginBottom="16dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Select how you'd like to interact with AI in your launcher:"
+        android:textSize="16sp"
+        android:textColor="#8E8E93"
+        android:gravity="center"
+        android:layout_marginBottom="24dp" />
+
+
+    <!-- External Model Option -->
+    <androidx.cardview.widget.CardView
+        android:id="@+id/externalModelCard"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="24dp"
+        app:cardCornerRadius="12dp"
+        app:cardElevation="4dp"
+        android:clickable="true"
+        android:focusable="true"
+        android:foreground="?android:attr/selectableItemBackground">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="20dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="8dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Grok AI (Cloud)"
+                    android:textSize="18sp"
+                    android:textStyle="bold"
+                    android:textColor="#1C1C1E" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="BEST"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:textColor="#FF9500"
+                    android:background="@drawable/badge_best"
+                    android:padding="6dp" />
+
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="• Powered by Grok AI from xAI\n• Most advanced AI capabilities\n• Real-time responses\n• Requires internet connection"
+                android:textSize="14sp"
+                android:textColor="#8E8E93"
+                android:lineSpacingExtra="4dp" />
+
+        </LinearLayout>
+
+    </androidx.cardview.widget.CardView>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="You can change this setting later in the app."
+        android:textSize="12sp"
+        android:textColor="#8E8E93"
+        android:gravity="center"
+        android:layout_marginTop="8dp" />
+
+</LinearLayout>
