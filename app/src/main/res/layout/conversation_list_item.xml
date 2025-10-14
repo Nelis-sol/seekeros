@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="16dp"
+    android:background="?android:attr/selectableItemBackground">
+
+    <TextView
+        android:id="@+id/conversationTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Conversation Title"
+        android:textColor="@android:color/white"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:maxLines="1"
+        android:ellipsize="end" />
+
+    <TextView
+        android:id="@+id/conversationPreview"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Last message preview..."
+        android:textColor="#CCFFFFFF"
+        android:textSize="14sp"
+        android:maxLines="2"
+        android:ellipsize="end"
+        android:layout_marginTop="4dp" />
+
+    <TextView
+        android:id="@+id/conversationTimestamp"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="2 hours ago"
+        android:textColor="#99FFFFFF"
+        android:textSize="12sp"
+        android:layout_marginTop="4dp" />
+
+</LinearLayout>

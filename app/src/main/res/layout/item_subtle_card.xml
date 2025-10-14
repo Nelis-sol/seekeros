@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.cardview.widget.CardView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_margin="24dp"
+    app:cardBackgroundColor="#1A000000"
+    app:cardCornerRadius="16dp"
+    app:cardElevation="2dp"
+    android:foreground="?android:attr/selectableItemBackground">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+        <!-- Banner for all cards -->
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="120dp">
+
+            <ImageView
+                android:id="@+id/cardBanner"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:scaleType="centerCrop"
+                android:src="@drawable/stock_photo_banner" />
+
+            <!-- Category overlay on top-right of banner -->
+            <TextView
+                android:id="@+id/cardCategory"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="top|end"
+                android:layout_marginTop="12dp"
+                android:layout_marginEnd="12dp"
+                android:text="Category"
+                android:textColor="@android:color/white"
+                android:textSize="10sp"
+                android:alpha="0.9"
+                android:background="@drawable/category_background"
+                android:paddingHorizontal="8dp"
+                android:paddingVertical="4dp" />
+
+        </FrameLayout>
+
+        <!-- Content area -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+        <!-- Header with image and title -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="8dp">
+
+            <ImageView
+                android:id="@+id/cardImage"
+                android:layout_width="43dp"
+                android:layout_height="43dp"
+                android:layout_marginEnd="12dp"
+                android:scaleType="centerCrop"
+                android:background="@drawable/card_image_background"
+                android:src="@drawable/ic_history" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/cardTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Card Title"
+                    android:textColor="@android:color/white"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:maxLines="1"
+                    android:ellipsize="end" />
+
+                <TextView
+                    android:id="@+id/cardSubtitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Card Subtitle"
+                    android:textColor="@android:color/white"
+                    android:textSize="12sp"
+                    android:alpha="0.7"
+                    android:maxLines="1"
+                    android:ellipsize="end" />
+
+            </LinearLayout>
+
+            <!-- Company branding -->
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:layout_marginStart="8dp">
+
+                <ImageView
+                    android:id="@+id/companyIcon"
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:src="@drawable/ic_company_logo"
+                    android:background="@drawable/company_icon_background"
+                    android:scaleType="centerInside"
+                    android:padding="6dp" />
+
+                <TextView
+                    android:id="@+id/companyName"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="AgentOS"
+                    android:textColor="@android:color/white"
+                    android:textSize="10sp"
+                    android:alpha="0.7"
+                    android:layout_marginTop="3dp" />
+
+            </LinearLayout>
+
+        </LinearLayout>
+
+        <!-- Description -->
+        <TextView
+            android:id="@+id/cardDescription"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="This is a detailed description of what this card does and how it can help you."
+            android:textColor="@android:color/white"
+            android:textSize="13sp"
+            android:alpha="0.8"
+            android:maxLines="2"
+            android:ellipsize="end"
+            android:layout_marginBottom="12dp" />
+
+        <!-- Action buttons -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="start"
+            android:layout_marginTop="16dp">
+
+            <Button
+                android:id="@+id/actionButton"
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:text="Action"
+                android:textSize="11sp"
+                android:textColor="@android:color/white"
+                android:background="@drawable/action_button_background"
+                android:paddingHorizontal="12dp"
+                android:layout_marginEnd="8dp"
+                android:minWidth="0dp" />
+
+            <Button
+                android:id="@+id/learnMoreButton"
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:text="Learn More"
+                android:textSize="11sp"
+                android:textColor="@android:color/white"
+                android:background="@drawable/learn_more_button_background"
+                android:paddingHorizontal="12dp"
+                android:minWidth="0dp" />
+
+        </LinearLayout>
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+</androidx.cardview.widget.CardView>

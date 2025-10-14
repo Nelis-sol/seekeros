@@ -9,6 +9,9 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.CALL_PHONE" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />
+    <uses-permission android:name="android.permission.BIND_APPWIDGET" />
+    <uses-permission android:name="android.permission.BIND_APPWIDGET_SERVICE" />
 
     <application
         android:allowBackup="true"
@@ -37,6 +40,43 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+        
+        <!-- Transparent Overlay Activity -->
+        <activity
+            android:name=".OverlayActivity"
+            android:exported="false"
+            android:theme="@style/Theme.AgentOS_Overlay"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:launchMode="standard" />
+        
+        <!-- Conversation History Activity -->
+        <activity
+            android:name=".ConversationHistoryActivity"
+            android:exported="false"
+            android:theme="@style/Theme.AgentOS_Dark"
+            android:screenOrientation="portrait" />
+        
+        <!-- Custom Widget Picker -->
+        <activity
+            android:name=".CustomWidgetPickerActivity"
+            android:exported="false"
+            android:theme="@style/Theme.AgentOS_Dark" />
+        
+        <!-- Widget support -->
+        <receiver android:name=".AgentOSWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider"
+                android:resource="@xml/agentos_widget_info" />
+        </receiver>
+        
+        <!-- Floating Overlay Service -->
+        <service
+            android:name=".FloatingOverlayService"
+            android:exported="false" />
     </application>
 
 </manifest>

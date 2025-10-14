@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/jobGridOverlay"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#CC000000"
+    android:clickable="true"
+    android:focusable="true">
+
+    <!-- Job Grid Container -->
+    <GridLayout
+        android:id="@+id/jobGrid"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:columnCount="3"
+        android:rowCount="2"
+        android:padding="24dp">
+
+        <!-- Job Slot 1 (Add New Job) -->
+        <FrameLayout
+            android:id="@+id/jobSlot1"
+            android:layout_width="100dp"
+            android:layout_height="100dp"
+            android:layout_margin="8dp"
+            android:background="@drawable/job_slot_background"
+            android:clickable="true"
+            android:focusable="true">
+            
+            <ImageView
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_gravity="center"
+                android:src="@android:drawable/ic_input_add"
+                android:tint="@android:color/white"
+                android:alpha="0.7" />
+                
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center|bottom"
+                android:layout_marginBottom="12dp"
+                android:text="New Job"
+                android:textColor="@android:color/white"
+                android:textSize="12sp"
+                android:alpha="0.7" />
+        </FrameLayout>
+
+        <!-- Job Slot 2 -->
+        <FrameLayout
+            android:id="@+id/jobSlot2"
+            android:layout_width="100dp"
+            android:layout_height="100dp"
+            android:layout_margin="8dp"
+            android:background="@drawable/job_slot_background"
+            android:clickable="true"
+            android:focusable="true" />
+
+        <!-- Job Slot 3 -->
+        <FrameLayout
+            android:id="@+id/jobSlot3"
+            android:layout_width="100dp"
+            android:layout_height="100dp"
+            android:layout_margin="8dp"
+            android:background="@drawable/job_slot_background"
+            android:clickable="true"
+            android:focusable="true" />
+
+        <!-- Job Slot 4 -->
+        <FrameLayout
+            android:id="@+id/jobSlot4"
+            android:layout_width="100dp"
+            android:layout_height="100dp"
+            android:layout_margin="8dp"
+            android:background="@drawable/job_slot_background"
+            android:clickable="true"
+            android:focusable="true" />
+
+        <!-- Job Slot 5 -->
+        <FrameLayout
+            android:id="@+id/jobSlot5"
+            android:layout_width="100dp"
+            android:layout_height="100dp"
+            android:layout_margin="8dp"
+            android:background="@drawable/job_slot_background"
+            android:clickable="true"
+            android:focusable="true" />
+
+        <!-- Job Slot 6 -->
+        <FrameLayout
+            android:id="@+id/jobSlot6"
+            android:layout_width="100dp"
+            android:layout_height="100dp"
+            android:layout_margin="8dp"
+            android:background="@drawable/job_slot_background"
+            android:clickable="true"
+            android:focusable="true" />
+
+    </GridLayout>
+
+</FrameLayout>
+

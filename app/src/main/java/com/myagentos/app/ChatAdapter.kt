@@ -80,4 +80,9 @@ class ChatAdapter(
     fun getMessages(): MutableList<ChatMessage> {
         return messages
     }
+    
+    fun clearMessages() {
+        messages.clear()
+        notifyDataSetChanged()
+    }
 }

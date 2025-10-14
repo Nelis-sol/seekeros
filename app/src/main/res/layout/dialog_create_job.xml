@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="24dp"
+    android:background="@drawable/dialog_background">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Create New Job"
+        android:textColor="@android:color/white"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="16dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Job Name"
+        android:textColor="@android:color/white"
+        android:textSize="14sp"
+        android:layout_marginBottom="8dp" />
+
+    <EditText
+        android:id="@+id/jobNameInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="e.g., Summarize, Translate, Extract..."
+        android:textColor="@android:color/white"
+        android:textColorHint="#888888"
+        android:background="@drawable/input_background"
+        android:padding="12dp"
+        android:layout_marginBottom="16dp"
+        android:inputType="text"
+        android:maxLines="1" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Prompt (AI Instructions)"
+        android:textColor="@android:color/white"
+        android:textSize="14sp"
+        android:layout_marginBottom="8dp" />
+
+    <EditText
+        android:id="@+id/jobPromptInput"
+        android:layout_width="match_parent"
+        android:layout_height="120dp"
+        android:hint="e.g., Summarize the content on this screen in 3 bullet points"
+        android:textColor="@android:color/white"
+        android:textColorHint="#888888"
+        android:background="@drawable/input_background"
+        android:padding="12dp"
+        android:layout_marginBottom="16dp"
+        android:gravity="top|start"
+        android:inputType="textMultiLine|textCapSentences"
+        android:maxLines="5" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Icon Emoji (optional)"
+        android:textColor="@android:color/white"
+        android:textSize="14sp"
+        android:layout_marginBottom="8dp" />
+
+    <EditText
+        android:id="@+id/jobIconInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="e.g., 📝 ✨ 🔍"
+        android:textColor="@android:color/white"
+        android:textColorHint="#888888"
+        android:background="@drawable/input_background"
+        android:padding="12dp"
+        android:layout_marginBottom="24dp"
+        android:inputType="text"
+        android:maxLines="1" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="end">
+
+        <Button
+            android:id="@+id/cancelButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Cancel"
+            android:textColor="@android:color/white"
+            android:background="@drawable/menu_item_background"
+            android:layout_marginEnd="8dp"
+            android:paddingStart="24dp"
+            android:paddingEnd="24dp" />
+
+        <Button
+            android:id="@+id/saveButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Save Job"
+            android:textColor="@android:color/white"
+            android:background="@drawable/send_button_background"
+            android:paddingStart="24dp"
+            android:paddingEnd="24dp" />
+
+    </LinearLayout>
+
+</LinearLayout>
+

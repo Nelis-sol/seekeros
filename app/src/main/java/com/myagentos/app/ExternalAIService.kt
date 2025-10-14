@@ -10,10 +10,15 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Response
 import org.json.JSONObject
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 class ExternalAIService {
     
-    private val client = OkHttpClient()
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .build()
 
     suspend fun generateResponse(userMessage: String, modelType: ModelType): String {
         return when (modelType) {
@@ -55,9 +60,11 @@ class ExternalAIService {
                         put("content", message)
                     })
                 })
-                put("max_tokens", 1000)
+                put("max_tokens", 2000)
                 put("temperature", 0.7)
             }
+            
+            android.util.Log.d("ExternalAIService", "Sending request to Grok API, message length: ${message.length}")
             
             val requestBody = json.toString().toRequestBody("application/json".toMediaType())
             
@@ -70,6 +77,8 @@ class ExternalAIService {
             
             val response: Response = client.newCall(request).execute()
             
+            android.util.Log.d("ExternalAIService", "Received response from Grok API, status: ${response.code}")
+            
             if (response.isSuccessful) {
                 val responseBody = response.body?.string()
                 val jsonResponse = JSONObject(responseBody ?: "")
@@ -79,16 +88,23 @@ class ExternalAIService {
                 if (choices.length() > 0) {
                     val firstChoice = choices.getJSONObject(0)
                     val messageObj = firstChoice.getJSONObject("message")
-                    return messageObj.getString("content")
+                    val content = messageObj.getString("content")
+                    android.util.Log.d("ExternalAIService", "Successfully got response, length: ${content.length}")
+                    return content
                 }
             } else {
                 val errorBody = response.body?.string()
+                android.util.Log.e("ExternalAIService", "Grok API Error (${response.code}): $errorBody")
                 return "Grok API Error (${response.code}): $errorBody"
             }
             
             return "No response from Grok API"
             
+        } catch (e: IOException) {
+            android.util.Log.e("ExternalAIService", "IOException calling Grok API: ${e.message}", e)
+            return "Network error calling Grok API: ${e.message}. Please check your internet connection."
         } catch (e: Exception) {
+            android.util.Log.e("ExternalAIService", "Error calling Grok API: ${e.message}", e)
             return "Error calling Grok API: ${e.message}"
         }
     }

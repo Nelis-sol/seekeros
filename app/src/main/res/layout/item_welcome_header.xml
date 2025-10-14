@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="16dp"
+    android:paddingTop="48dp">
+
+    <TextView
+        android:id="@+id/welcomeTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Welcome to AgentOS"
+        android:textColor="@android:color/white"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:layout_marginBottom="8dp" />
+
+    <TextView
+        android:id="@+id/welcomeSubtitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Your AI-powered launcher"
+        android:textColor="@android:color/white"
+        android:textSize="16sp"
+        android:alpha="0.7"
+        android:gravity="center"
+        android:layout_marginBottom="16dp" />
+
+    <!-- Browse Pill (subtle, centered below subtitle) -->
+    <LinearLayout
+        android:id="@+id/browsePill"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
+        android:layout_gravity="center_horizontal"
+        android:background="@drawable/pill_background_compact"
+        android:clickable="true"
+        android:focusable="true"
+        android:alpha="0.7"
+        android:layout_marginBottom="32dp">
+        
+        <ImageView
+            android:layout_width="16dp"
+            android:layout_height="16dp"
+            android:src="@android:drawable/ic_menu_search"
+            android:tint="@android:color/white" />
+        
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Browse"
+            android:textColor="@android:color/white"
+            android:textSize="12sp"
+            android:layout_marginStart="6dp" />
+    </LinearLayout>
+
+</LinearLayout>
