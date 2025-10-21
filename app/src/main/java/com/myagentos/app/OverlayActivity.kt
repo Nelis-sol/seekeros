@@ -54,6 +54,7 @@ class OverlayActivity : AppCompatActivity(), CoroutineScope by CoroutineScope(Di
     private lateinit var chatAdapter: SimpleChatAdapter
     private val messages = mutableListOf<ChatMessage>()
     private lateinit var externalAIService: ExternalAIService
+    private lateinit var blinkService: BlinkService
     private lateinit var inputLayout: android.widget.LinearLayout
     private var isKeyboardVisible = false
     private var hasConversation = false // Track if user has sent at least one message
@@ -116,6 +117,9 @@ class OverlayActivity : AppCompatActivity(), CoroutineScope by CoroutineScope(Di
             }
         }
         
+        // Initialize services
+        blinkService = BlinkService()
+        
         // Set up the overlay
         setupOverlay()
         
@@ -141,6 +145,87 @@ class OverlayActivity : AppCompatActivity(), CoroutineScope by CoroutineScope(Di
         } else {
             registerReceiver(closeReceiver, filter)
         }
+        
+        // Handle intent if it's a deep link
+        handleIntent(intent)
+    }
+    
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent?.let { handleIntent(it) }
+    }
+    
+    private fun handleIntent(intent: Intent) {
+        android.util.Log.d("OverlayActivity", "Handling intent: action=${intent.action}, data=${intent.data}")
+        
+        // Handle Solana Action / Blink deep link
+        if (intent.action == Intent.ACTION_VIEW && intent.data != null) {
+            val blinkUrl = intent.data.toString()
+            android.util.Log.d("OverlayActivity", "Received blink URL: $blinkUrl")
+            handleBlinkUrl(blinkUrl)
+        }
+    }
+    
+    private fun handleBlinkUrl(blinkUrl: String) {
+        android.util.Log.d("OverlayActivity", "Processing blink URL: $blinkUrl")
+        
+        // Parse the blink URL
+        val actionUrl = blinkService.parseBlinkUrl(blinkUrl)
+        if (actionUrl == null) {
+            android.util.Log.e("OverlayActivity", "Failed to parse blink URL")
+            android.widget.Toast.makeText(this, "Invalid Solana Action URL", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        android.util.Log.d("OverlayActivity", "Parsed action URL: $actionUrl")
+        android.widget.Toast.makeText(this, "Loading Solana Action...", android.widget.Toast.LENGTH_SHORT).show()
+        
+        // Fetch metadata in background
+        launch {
+            val startTime = System.currentTimeMillis()
+            
+            val metadata = withContext(Dispatchers.IO) {
+                blinkService.fetchBlinkMetadata(actionUrl)
+            }
+            
+            val fetchTime = (System.currentTimeMillis() - startTime) / 1000.0
+            android.util.Log.d("OverlayActivity", "Blink metadata fetch completed in ${fetchTime}s")
+            
+            if (metadata == null) {
+                android.util.Log.e("OverlayActivity", "Failed to fetch blink metadata")
+                android.widget.Toast.makeText(this@OverlayActivity, "Failed to load action", android.widget.Toast.LENGTH_SHORT).show()
+                
+                // Add error message to chat
+                val errorMessage = ChatMessage(
+                    text = "Failed to load Solana Action from $actionUrl",
+                    isUser = false,
+                    messageType = MessageType.TEXT
+                )
+                chatAdapter.addMessage(errorMessage)
+                chatRecyclerView.scrollToPosition(chatAdapter.itemCount - 1)
+                hasConversation = true
+                updateTransparency()
+                return@launch
+            }
+            
+            android.util.Log.d("OverlayActivity", "Successfully fetched blink metadata: ${metadata.title}")
+            
+            // Add blink as a message to chat
+            val blinkMessage = ChatMessage(
+                text = metadata.title,
+                isUser = false,
+                messageType = MessageType.BLINK,
+                blinkMetadata = metadata
+            )
+            
+            chatAdapter.addMessage(blinkMessage)
+            chatRecyclerView.scrollToPosition(chatAdapter.itemCount - 1)
+            hasConversation = true
+            updateTransparency()
+            
+            android.widget.Toast.makeText(this@OverlayActivity, "Solana Action loaded", android.widget.Toast.LENGTH_SHORT).show()
+        }
     }
     
     override fun onDestroy() {
@@ -161,13 +246,13 @@ class OverlayActivity : AppCompatActivity(), CoroutineScope by CoroutineScope(Di
         
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
-                // Handle double-tap detection first
+                // Handle triple-tap detection first
                 val currentTime = System.currentTimeMillis()
-                if (currentTime - lastTapTime < 300) { // 300ms double-tap window
+                if (currentTime - lastTapTime < 300) { // 300ms tap window
                     tapCount++
-                    if (tapCount == 2) {
-                        // Double tap detected
-                        android.util.Log.d("OverlayActivity", "DOUBLE TAP DETECTED at (${event.x}, ${event.y})")
+                    if (tapCount == 3) {
+                        // Triple tap detected
+                        android.util.Log.d("OverlayActivity", "TRIPLE TAP DETECTED at (${event.x}, ${event.y})")
                         showJobGrid()
                         tapCount = 0
                         return true // Consume the event
@@ -232,14 +317,23 @@ class OverlayActivity : AppCompatActivity(), CoroutineScope by CoroutineScope(Di
         try {
             android.util.Log.d("OverlayActivity", "Setting up simple transparent overlay")
             
-            // Make window and root transparent
-            window.decorView.rootView.setBackgroundColor(android.graphics.Color.TRANSPARENT)
-            
-            // Make window adjust for keyboard - use ADJUST_PAN to move input field up
-            window.setSoftInputMode(
-                android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN or
-                android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN
-            )
+        // Make window and root transparent
+        window.decorView.rootView.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+
+        // Make window adjust for keyboard - use ADJUST_PAN to move input field up
+        window.setSoftInputMode(
+            android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN or
+            android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN
+        )
+        
+        // Allow touches outside the overlay content to pass through
+        window.setFlags(
+            android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+        )
+        
+        // Also set the window to allow touches to pass through in areas without content
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH)
             
             // Set up close button
             val closeButton = findViewById<ImageButton>(R.id.closeButton)
@@ -609,7 +703,7 @@ class OverlayActivity : AppCompatActivity(), CoroutineScope by CoroutineScope(Di
         // Set up RecyclerView
         chatRecyclerView = findViewById(R.id.chatRecyclerView)
         chatRecyclerView.layoutManager = androidx.recyclerview.widget.LinearLayoutManager(this)
-        chatAdapter = SimpleChatAdapter(messages, showCards = false) // Don't show cards or welcome header
+        chatAdapter = SimpleChatAdapter(messages, showCards = false, blinkCard = null) // Don't show cards or welcome header
         chatRecyclerView.adapter = chatAdapter
         
         // Set up input and send button
@@ -665,17 +759,17 @@ class OverlayActivity : AppCompatActivity(), CoroutineScope by CoroutineScope(Di
     }
     
     private fun updateTransparency() {
-        // Use darker background (75% opacity) if keyboard is visible OR if there's a conversation
+        // Use darker background (80% opacity) if keyboard is visible OR if there's a conversation
         val shouldBeDark = isKeyboardVisible || hasConversation
-        
+
         if (shouldBeDark) {
             android.util.Log.d("OverlayActivity", "Setting dark background (keyboard=$isKeyboardVisible, hasConversation=$hasConversation)")
-            chatRecyclerView.setBackgroundColor(android.graphics.Color.parseColor("#BF000000")) // 75% opacity
-            inputLayout.setBackgroundColor(android.graphics.Color.parseColor("#BF000000")) // 75% opacity
+            chatRecyclerView.setBackgroundColor(android.graphics.Color.parseColor("#CC000000")) // 80% opacity
+            inputLayout.setBackgroundColor(android.graphics.Color.parseColor("#CC000000")) // 80% opacity
         } else {
-            android.util.Log.d("OverlayActivity", "Setting transparent background")
-            chatRecyclerView.setBackgroundColor(android.graphics.Color.parseColor("#33000000")) // 20% opacity
-            inputLayout.setBackgroundColor(android.graphics.Color.parseColor("#33000000")) // 20% opacity
+            android.util.Log.d("OverlayActivity", "Setting semi-transparent background")
+            chatRecyclerView.setBackgroundColor(android.graphics.Color.parseColor("#66000000")) // 40% opacity
+            inputLayout.setBackgroundColor(android.graphics.Color.parseColor("#66000000")) // 40% opacity
         }
     }
     
@@ -719,6 +813,22 @@ class OverlayActivity : AppCompatActivity(), CoroutineScope by CoroutineScope(Di
     // Extension function to convert dp to pixels
     private fun Int.dpToPx(): Int {
         return (this * resources.displayMetrics.density).toInt()
+    }
+    
+    // Handle touches on the right edge (where floating button is)
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.action == MotionEvent.ACTION_DOWN) {
+            val screenWidth = resources.displayMetrics.widthPixels
+            val buttonWidth = (80 * resources.displayMetrics.density).toInt()
+            
+            // Check if touch is in the floating button area (right edge, half visible)
+            if (event.rawX > screenWidth - (buttonWidth / 2)) {
+                android.util.Log.d("OverlayActivity", "Touch detected in floating button area, closing overlay")
+                finish()
+                return true
+            }
+        }
+        return super.onTouchEvent(event)
     }
 }
 

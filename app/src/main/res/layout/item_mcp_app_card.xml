@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Blink-style card for MCP Apps: image on top, content below -->
+<androidx.cardview.widget.CardView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_margin="24dp"
+    app:cardBackgroundColor="#1C1C1E"
+    app:cardCornerRadius="16dp"
+    app:cardElevation="2dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <!-- App Icon/Banner (top section - dynamic height like Blink cards) -->
+        <FrameLayout
+            android:id="@+id/mcpAppBannerContainer"
+            android:layout_width="match_parent"
+            android:layout_height="120dp">
+            
+            <ImageView
+                android:id="@+id/mcpAppIcon"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:scaleType="centerCrop"
+                android:src="@drawable/stock_photo_banner" />
+            
+            <!-- Favorite/Star button overlay -->
+            <ImageButton
+                android:id="@+id/mcpFavoriteButton"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_gravity="top|end"
+                android:layout_margin="12dp"
+                android:background="@android:color/transparent"
+                android:src="@android:drawable/btn_star_big_off"
+                android:scaleType="centerInside"
+                android:padding="8dp"
+                android:contentDescription="Add to favorites" />
+                
+        </FrameLayout>
+
+        <!-- Content Area (bottom section) -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="20dp">
+
+            <!-- App Name -->
+            <TextView
+                android:id="@+id/mcpAppName"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="App Name"
+                android:textColor="@android:color/white"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:maxLines="1"
+                android:ellipsize="end" />
+
+            <!-- App Description -->
+            <TextView
+                android:id="@+id/mcpAppDescription"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="16dp"
+                android:text="App description goes here"
+                android:textColor="#AAAAAA"
+                android:textSize="14sp"
+                android:maxLines="4"
+                android:ellipsize="end" />
+
+            <!-- Tool Buttons Container (shown when connected) - horizontal with wrapping -->
+            <com.google.android.flexbox.FlexboxLayout
+                android:id="@+id/mcpToolsButtonContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:flexWrap="wrap"
+                app:alignItems="flex_start"
+                app:alignContent="flex_start"
+                android:visibility="gone" />
+
+            <!-- Action Buttons Container (View + Connect) -->
+            <LinearLayout
+                android:id="@+id/mcpActionButtonsContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="start">
+
+                <!-- View Button (primary style - always visible) -->
+                <Button
+                    android:id="@+id/mcpViewButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="View"
+                    android:textColor="@android:color/black"
+                    android:textSize="13sp"
+                    android:textAllCaps="false"
+                    android:textStyle="bold"
+                    android:background="@drawable/primary_button_background"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:paddingTop="5dp"
+                    android:paddingBottom="5dp"
+                    android:minWidth="0dp"
+                    android:minHeight="0dp"
+                    android:layout_marginEnd="8dp" />
+
+                <!-- Connect Button (shown when not connected) -->
+                <Button
+                    android:id="@+id/mcpConnectButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Connect"
+                    android:textColor="@android:color/white"
+                    android:textSize="13sp"
+                    android:textAllCaps="false"
+                    android:background="@drawable/pill_button_background"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:paddingTop="5dp"
+                    android:paddingBottom="5dp"
+                    android:minWidth="0dp"
+                    android:minHeight="0dp" />
+
+            </LinearLayout>
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+</androidx.cardview.widget.CardView>
+

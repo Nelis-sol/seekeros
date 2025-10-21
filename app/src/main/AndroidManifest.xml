@@ -39,6 +39,13 @@
                 <category android:name="android.intent.category.HOME" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
+            <!-- Solana Action deep link -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="solana-action" />
+            </intent-filter>
         </activity>
         
         <!-- Transparent Overlay Activity -->
@@ -53,6 +60,20 @@
         <!-- Conversation History Activity -->
         <activity
             android:name=".ConversationHistoryActivity"
+            android:exported="false"
+            android:theme="@style/Theme.AgentOS_Dark"
+            android:screenOrientation="portrait" />
+        
+        <!-- MCP Tool Invocation Activity -->
+        <activity
+            android:name=".McpToolInvocationActivity"
+            android:exported="false"
+            android:theme="@style/Theme.AgentOS_Dark"
+            android:screenOrientation="portrait" />
+        
+        <!-- MCP App Details Activity -->
+        <activity
+            android:name=".McpAppDetailsActivity"
             android:exported="false"
             android:theme="@style/Theme.AgentOS_Dark"
             android:screenOrientation="portrait" />

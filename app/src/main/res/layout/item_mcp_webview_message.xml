@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- MCP WebView Message Item -->
+<androidx.cardview.widget.CardView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_margin="8dp"
+    app:cardBackgroundColor="#1C1C1E"
+    app:cardCornerRadius="12dp"
+    app:cardElevation="2dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <!-- WebView Container -->
+        <FrameLayout
+            android:id="@+id/webViewContainer"
+            android:layout_width="match_parent"
+            android:layout_height="400dp"
+            android:background="#000000">
+
+            <WebView
+                android:id="@+id/mcpInlineWebView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <!-- Loading indicator -->
+            <ProgressBar
+                android:id="@+id/webViewLoading"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:indeterminateTint="@android:color/white"
+                android:visibility="visible" />
+
+        </FrameLayout>
+
+        <!-- Expand/Collapse button -->
+        <Button
+            android:id="@+id/expandButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Expand"
+            android:textColor="@android:color/white"
+            android:textSize="12sp"
+            android:background="@android:color/transparent"
+            android:padding="8dp" />
+
+    </LinearLayout>
+
+</androidx.cardview.widget.CardView>
+

@@ -27,6 +27,8 @@ class FloatingOverlayService : Service() {
     override fun onCreate() {
         super.onCreate()
         
+        android.util.Log.d("FloatingOverlayService", "Service onCreate() called")
+        
         // Create floating button
         floatingView = LayoutInflater.from(this).inflate(R.layout.floating_overlay, null)
         
@@ -190,8 +192,15 @@ class FloatingOverlayService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        android.util.Log.d("FloatingOverlayService", "Service onDestroy() called - button being removed")
         floatingView?.let { windowManager?.removeView(it) }
         Toast.makeText(this, "Floating button removed", Toast.LENGTH_SHORT).show()
+    }
+    
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        android.util.Log.d("FloatingOverlayService", "Service onStartCommand() called")
+        // Return START_STICKY so the service restarts if killed
+        return START_STICKY
     }
 }
 

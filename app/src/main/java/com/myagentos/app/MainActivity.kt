@@ -30,8 +30,15 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+// Enum for tab types in card overview
+enum class TabType {
+    BLINKS,
+    APPS
+}
 
 class MainActivity : AppCompatActivity() {
     private lateinit var chatRecyclerView: RecyclerView
@@ -60,7 +67,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var appManager: AppManager
     private lateinit var usageStatsManager: UsageStatsManager
     private lateinit var conversationManager: ConversationManager
+    private lateinit var blinkService: BlinkService
+    private lateinit var walletManager: WalletManager
+    private lateinit var mcpService: McpService
     private var selectedModel: ModelType? = null
+    
+    // MCP app state
+    private val connectedApps = mutableMapOf<String, McpApp>()
     private var installedApps: List<AppInfo> = emptyList()
     private var isUpdatingPills = false // Flag to prevent infinite loops
     private var hasShownPermissionDialog = false // Flag to show permission dialog only once per session
@@ -89,9 +102,35 @@ class MainActivity : AppCompatActivity() {
     private var lastTapTime = 0L
     private var tapCount = 0
     private var isJobGridVisible = false
+    
+    // Tab state variables for Blinks vs Apps
+    private lateinit var cardTypeTabLayout: com.google.android.material.tabs.TabLayout
+    private var currentTab: TabType = TabType.APPS  // Default to Apps tab
+    
+    // Track current MCP app context for showing relevant tool pills
+    private var currentMcpAppContext: String? = null  // appId of the current MCP app in conversation
+    
+    // Track last invoked tool for re-invocation with updated parameters
+    private data class LastInvokedTool(
+        val appId: String,
+        val tool: McpTool,
+        val lastParameters: Map<String, Any>
+    )
+    private var lastInvokedTool: LastInvokedTool? = null
+    
+    // Parameter collection state
+    private data class ParameterCollectionState(
+        val appId: String,
+        val tool: McpTool,
+        val requiredParams: List<String>,
+        val collectedParams: MutableMap<String, Any> = mutableMapOf(),
+        val conversationHistory: MutableList<Pair<String, String>> = mutableListOf() // role to content
+    )
+    private var activeParameterCollection: ParameterCollectionState? = null
 
     companion object {
         private var savedMessages: MutableList<ChatMessage>? = null
+        private const val REQUEST_CODE_APP_DETAILS = 1001
     }
     
     // Override dispatchTouchEvent to intercept right-edge gestures before system
@@ -102,13 +141,13 @@ class MainActivity : AppCompatActivity() {
         
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
-                // Handle double-tap detection first
+                // Handle triple-tap detection first
                 val currentTime = System.currentTimeMillis()
-                if (currentTime - lastTapTime < 300) { // 300ms double-tap window
+                if (currentTime - lastTapTime < 300) { // 300ms tap window
                     tapCount++
-                    if (tapCount == 2) {
-                        // Double tap detected
-                        android.util.Log.d("JobGrid", "DOUBLE TAP DETECTED at (${event.x}, ${event.y})")
+                    if (tapCount == 3) {
+                        // Triple tap detected
+                        android.util.Log.d("JobGrid", "TRIPLE TAP DETECTED at (${event.x}, ${event.y})")
                         showJobGrid()
                         tapCount = 0
                         return true // Consume the event
@@ -169,6 +208,12 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Clear MCP app context and parameter collection on app start (fresh state)
+        currentMcpAppContext = null
+        activeParameterCollection = null
+        lastInvokedTool = null
+        android.util.Log.d("MCP", "Cleared MCP app context and parameter collection on app start")
         
         // Check if we should show as transparent overlay
         val showTransparent = intent.getBooleanExtra("SHOW_TRANSPARENT", false)
@@ -235,13 +280,56 @@ class MainActivity : AppCompatActivity() {
         appManager = AppManager(this)
         usageStatsManager = UsageStatsManager(this)
         conversationManager = ConversationManager(this)
+        blinkService = BlinkService()
+        walletManager = WalletManager(this)
+        mcpService = McpService.getInstance()
+        
+        // Reset any stale MCP connections from previous app session
+        mcpService.resetConnections()
+        
+        // Set up connection loss listener to auto-reconnect or show Connect button
+        mcpService.setOnConnectionLost { serverUrl ->
+            android.util.Log.d("MCP", "Connection lost to: $serverUrl")
+            runOnUiThread {
+                handleMcpConnectionLost(serverUrl)
+            }
+        }
 
         setupUI()
         checkFirstLaunch()
         showRecentApps()
         
+        // Auto-start floating button service
+        autoStartFloatingButton()
+        
         // Handle intent extras
         handleIntentExtras()
+        
+        // Load test blinks for development/testing
+        loadTestBlinks()
+    }
+    
+    private fun autoStartFloatingButton() {
+        // Check if we have overlay permission
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            if (Settings.canDrawOverlays(this)) {
+                // Start the floating button service
+                val serviceIntent = Intent(this, FloatingOverlayService::class.java)
+                startService(serviceIntent)
+                android.util.Log.d("MainActivity", "Auto-started floating button service")
+                Toast.makeText(this, "Floating button active", Toast.LENGTH_SHORT).show()
+            } else {
+                android.util.Log.d("MainActivity", "No overlay permission, requesting permission")
+                // Request overlay permission automatically on first launch
+                requestOverlayPermission()
+            }
+        } else {
+            // For older Android versions, just start the service
+            val serviceIntent = Intent(this, FloatingOverlayService::class.java)
+            startService(serviceIntent)
+            android.util.Log.d("MainActivity", "Auto-started floating button service (pre-M)")
+            Toast.makeText(this, "Floating button active", Toast.LENGTH_SHORT).show()
+        }
     }
     
     override fun onNewIntent(intent: Intent?) {
@@ -276,6 +364,10 @@ class MainActivity : AppCompatActivity() {
         rightTray = findViewById(R.id.rightTray)
         val rightEdgeDetector = findViewById<View>(R.id.rightEdgeDetector)
         
+        // Initialize tab layout for Blinks vs Apps
+        cardTypeTabLayout = findViewById(R.id.cardTypeTabLayout)
+        setupTabLayout()
+        
         // Initialize radial menu views
         jobGridOverlay = findViewById(R.id.jobGridOverlay)
         embeddedAppContainer = findViewById(R.id.embeddedAppContainer)
@@ -297,10 +389,36 @@ class MainActivity : AppCompatActivity() {
 
         // Setup Chat
         val messages = savedMessages ?: mutableListOf()
-        chatAdapter = SimpleChatAdapter(messages, true, false) { 
-            // Browse pill click callback
-            showBrowser()
-        }
+        chatAdapter = SimpleChatAdapter(
+            messages = messages,
+            isDarkMode = true,
+            showCards = false,
+            onBrowseClick = {
+                // Browse pill click callback
+                showBrowser()
+            },
+            blinkCard = null,
+            onBlinkActionClick = { actionUrl, parameters ->
+                // Handle blink action execution
+                handleBlinkActionExecution(actionUrl, parameters)
+            },
+            onMcpAppConnectClick = { appId ->
+                // Handle MCP app connection
+                connectToMcpApp(appId)
+            },
+            getConnectedApps = {
+                // Provide connected apps state
+                connectedApps
+            },
+            onMcpToolInvokeClick = { appId, toolName ->
+                // Handle MCP tool invocation
+                invokeMcpTool(appId, toolName)
+            },
+            onMcpAppDetailsClick = { appId ->
+                // Handle MCP app details screen
+                showMcpAppDetails(appId)
+            }
+        )
         
         // Use GridLayoutManager for 1-column cards
         val gridLayoutManager = androidx.recyclerview.widget.GridLayoutManager(this, 1)
@@ -311,6 +429,9 @@ class MainActivity : AppCompatActivity() {
         }
         chatRecyclerView.layoutManager = gridLayoutManager
         chatRecyclerView.adapter = chatAdapter
+        
+        // Set initial card type to match default tab (Apps)
+        chatAdapter.setCardType(currentTab)
         
         // Enable nested scrolling for smooth scrolling with SwipeRefreshLayout
         chatRecyclerView.isNestedScrollingEnabled = true
@@ -341,6 +462,16 @@ class MainActivity : AppCompatActivity() {
             chatAdapter.clearMessages()
             messageInput.setText("")
             hideKeyboardAndClearFocus()
+            
+            // Clear MCP app context and parameter collection
+            currentMcpAppContext = null
+            activeParameterCollection = null
+            lastInvokedTool = null
+            android.util.Log.d("MCP", "Cleared MCP app context and parameter collection (new chat button)")
+            
+            // Show recent apps pills (will respect cleared MCP context)
+            showRecentApps()
+            android.util.Log.d("MCP", "Updated pills to show recent apps after new chat")
         }
         
         // Setup add agent button (placeholder for now)
@@ -561,16 +692,40 @@ class MainActivity : AppCompatActivity() {
         android.util.Log.e("AI_RESPONSE", "=== generateAIResponse() CALLED ===")
         android.util.Log.e("AI_RESPONSE", "User message: $userMessage")
         android.util.Log.e("AI_RESPONSE", "Selected model: $selectedModel")
+        android.util.Log.d("MCP", "Active parameter collection: ${activeParameterCollection != null}")
+        android.util.Log.d("MCP", "Last invoked tool: ${lastInvokedTool?.tool?.name}")
+        android.util.Log.d("MCP", "Current MCP context: $currentMcpAppContext")
         
         CoroutineScope(Dispatchers.IO).launch {
             android.util.Log.e("AI_RESPONSE", "Coroutine started on thread: ${Thread.currentThread().name}")
             try {
                 android.util.Log.e("AI_RESPONSE", "About to call API...")
-                val aiResponse = when (selectedModel) {
-                    ModelType.EXTERNAL_CHATGPT, ModelType.EXTERNAL_GROK -> {
-                        externalAIService.generateResponse(userMessage, selectedModel!!)
+                
+                // Intelligent routing based on context
+                val aiResponse = when {
+                    // 1. Active parameter collection - collecting required params
+                    activeParameterCollection != null -> {
+                        android.util.Log.d("MCP", "Route: Parameter collection conversation")
+                        continueParameterCollection(userMessage)
                     }
-                    null -> "Please select an AI model first."
+                    
+                    // 2. In MCP context - check for tool invocation or parameter changes
+                    currentMcpAppContext != null -> {
+                        handleMcpContextMessage(userMessage)
+                    }
+                    
+                    // 3. Regular conversation - no MCP context
+                    else -> {
+                        android.util.Log.d("MCP", "Route: Regular conversation")
+                        when (selectedModel) {
+                            ModelType.EXTERNAL_CHATGPT, ModelType.EXTERNAL_GROK -> {
+                                val conversationHistory = buildConversationHistory()
+                                android.util.Log.d("MCP", "Built conversation history with ${conversationHistory.size} messages")
+                                externalAIService.generateResponseWithHistory(userMessage, selectedModel!!, conversationHistory)
+                            }
+                            null -> "Please select an AI model first."
+                        }
+                    }
                 }
                 android.util.Log.e("AI_RESPONSE", "API response received: ${aiResponse.take(100)}...")
                 
@@ -578,12 +733,17 @@ class MainActivity : AppCompatActivity() {
                     android.util.Log.e("AI_RESPONSE", "Switched to Main thread: ${Thread.currentThread().name}")
                     android.util.Log.e("AI_RESPONSE", "Current itemCount BEFORE adding: ${chatAdapter.itemCount}")
                     
-                    val aiMessage = ChatMessage(aiResponse, isUser = false)
-                    chatAdapter.addMessage(aiMessage)
-                    android.util.Log.e("AI_RESPONSE", "addMessage() called, itemCount AFTER: ${chatAdapter.itemCount}")
-                    
-                    conversationManager.addMessage(aiMessage)
-                    conversationManager.saveCurrentConversation()
+                    // Only add AI message if response is not empty (empty = tool re-invoked)
+                    if (aiResponse.isNotEmpty()) {
+                        val aiMessage = ChatMessage(aiResponse, isUser = false)
+                        chatAdapter.addMessage(aiMessage)
+                        android.util.Log.e("AI_RESPONSE", "addMessage() called, itemCount AFTER: ${chatAdapter.itemCount}")
+                        
+                        conversationManager.addMessage(aiMessage)
+                        conversationManager.saveCurrentConversation()
+                    } else {
+                        android.util.Log.d("MCP", "Empty AI response (tool re-invoked), not adding message")
+                    }
                     
                     android.util.Log.e("AI_RESPONSE", "Forcing UI update...")
                     android.util.Log.e("AI_RESPONSE", "RecyclerView: width=${chatRecyclerView.width}, height=${chatRecyclerView.height}, visibility=${chatRecyclerView.visibility}, childCount=${chatRecyclerView.childCount}")
@@ -670,13 +830,13 @@ class MainActivity : AppCompatActivity() {
     
     // Apply inline pills to the text input
     private fun applyInlinePills(text: String) {
-        if (text.isEmpty() || installedApps.isEmpty() || isUpdatingPills || isBrowserVisible) return
+        if (text.isEmpty() || isUpdatingPills || isBrowserVisible) return
         
         val spannableString = android.text.SpannableString(text)
         val textLower = text.lowercase()
         var hasPills = false
         
-        // Find all app names in the text - only match complete words
+        // Find all installed app names in the text - only match complete words
         for (app in installedApps) {
             val appNameLower = app.appName.lowercase()
             if (appNameLower.length > 2 && isCompleteWordMatch(textLower, appNameLower)) {
@@ -711,6 +871,53 @@ class MainActivity : AppCompatActivity() {
                     val pillSpan = createPillSpan(app)
                     
                     // Apply pill styling with custom span
+                    spannableString.setSpan(clickableSpan, index, endIndex, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    spannableString.setSpan(pillSpan, index, endIndex, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    spannableString.setSpan(android.text.style.ForegroundColorSpan(android.graphics.Color.WHITE), index, endIndex, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    spannableString.setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), index, endIndex, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    
+                    hasPills = true
+                    startIndex = endIndex
+                }
+            }
+        }
+        
+        // Also find MCP app names in the text
+        val allMcpApps = AppDirectory.getFeaturedApps()
+        for (mcpApp in allMcpApps) {
+            val appNameLower = mcpApp.name.lowercase()
+            if (appNameLower.length > 2 && isCompleteWordMatch(textLower, appNameLower)) {
+                // Find all occurrences of this MCP app name
+                var startIndex = 0
+                while (true) {
+                    val index = textLower.indexOf(appNameLower, startIndex)
+                    if (index == -1) break
+                    
+                    // Double-check this is a complete word match at this position
+                    if (!isCompleteWordMatchAtPosition(textLower, appNameLower, index)) {
+                        startIndex = index + 1
+                        continue
+                    }
+                    
+                    val endIndex = index + appNameLower.length
+                    
+                    // Create clickable span for the MCP app name
+                    val clickableSpan = object : android.text.style.ClickableSpan() {
+                        override fun onClick(widget: android.view.View) {
+                            // Show suggestions for this specific MCP app
+                            showCombinedAppSuggestions(emptyList(), listOf(mcpApp))
+                        }
+                        
+                        override fun updateDrawState(ds: android.text.TextPaint) {
+                            super.updateDrawState(ds)
+                            ds.isUnderlineText = false // Remove underline
+                        }
+                    }
+                    
+                    // Create custom span for the MCP pill with different styling
+                    val pillSpan = createMcpPillSpan(mcpApp)
+                    
+                    // Apply pill styling with custom span (different color for MCP apps)
                     spannableString.setSpan(clickableSpan, index, endIndex, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                     spannableString.setSpan(pillSpan, index, endIndex, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                     spannableString.setSpan(android.text.style.ForegroundColorSpan(android.graphics.Color.WHITE), index, endIndex, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
@@ -832,8 +1039,98 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
+    // Create a custom span for MCP app pill with same styling as regular apps
+    private fun createMcpPillSpan(mcpApp: McpApp): android.text.style.ReplacementSpan {
+        return object : android.text.style.ReplacementSpan() {
+            override fun getSize(paint: android.graphics.Paint, text: CharSequence?, start: Int, end: Int, fm: android.graphics.Paint.FontMetricsInt?): Int {
+                val iconSize = (16 * resources.displayMetrics.density).toInt()
+                val horizontalPadding = (8 * resources.displayMetrics.density).toInt()
+                val iconTextGap = (4 * resources.displayMetrics.density).toInt()
+                val verticalPadding = (8 * resources.displayMetrics.density).toInt()
+                val textWidth = paint.measureText(text, start, end).toInt()
+                
+                if (fm != null) {
+                    val requiredPillHeight = iconSize + (verticalPadding * 2)
+                    val currentTextHeight = fm.bottom - fm.top
+                    
+                    if (requiredPillHeight > currentTextHeight) {
+                        val extraHeight = requiredPillHeight - currentTextHeight
+                        fm.top -= extraHeight / 2
+                        fm.bottom += extraHeight / 2
+                        fm.ascent -= extraHeight / 2
+                        fm.descent += extraHeight / 2
+                    }
+                }
+                
+                return horizontalPadding + iconSize + iconTextGap + textWidth + horizontalPadding
+            }
+            
+            override fun draw(canvas: android.graphics.Canvas, text: CharSequence?, start: Int, end: Int, x: Float, top: Int, y: Int, bottom: Int, paint: android.graphics.Paint) {
+                val iconSize = (16 * resources.displayMetrics.density).toInt()
+                val horizontalPadding = (8 * resources.displayMetrics.density).toInt()
+                val iconTextGap = (4 * resources.displayMetrics.density).toInt()
+                val cornerRadius = 12 * resources.displayMetrics.density
+                
+                val textWidth = paint.measureText(text, start, end)
+                val totalWidth = horizontalPadding + iconSize + iconTextGap + textWidth + horizontalPadding
+                val totalHeight = (bottom - top).toFloat()
+                
+                // Use same styling as regular app pills - grey background
+                val rect = android.graphics.RectF(x, top.toFloat(), x + totalWidth, bottom.toFloat())
+                val bgPaint = android.graphics.Paint().apply {
+                    isAntiAlias = true
+                    color = android.graphics.Color.parseColor("#3A3A3C") // Same grey as regular apps
+                    style = android.graphics.Paint.Style.FILL
+                }
+                canvas.drawRoundRect(rect, cornerRadius, cornerRadius, bgPaint)
+                
+                // Same border as regular apps
+                val borderPaint = android.graphics.Paint().apply {
+                    isAntiAlias = true
+                    color = android.graphics.Color.parseColor("#4A4A4C") // Same border as regular apps
+                    style = android.graphics.Paint.Style.STROKE
+                    strokeWidth = 1 * resources.displayMetrics.density
+                }
+                canvas.drawRoundRect(rect, cornerRadius, cornerRadius, borderPaint)
+                
+                // Draw placeholder icon (use app icon resource)
+                try {
+                    val iconDrawable = ContextCompat.getDrawable(this@MainActivity, R.drawable.ic_apps)
+                    if (iconDrawable != null) {
+                        val iconBitmap = android.graphics.Bitmap.createBitmap(iconSize, iconSize, android.graphics.Bitmap.Config.ARGB_8888)
+                        val iconCanvas = android.graphics.Canvas(iconBitmap)
+                        iconDrawable.setBounds(0, 0, iconSize, iconSize)
+                        iconDrawable.draw(iconCanvas)
+                        
+                        val iconY = top + (totalHeight - iconSize) / 2f
+                        canvas.drawBitmap(iconBitmap, x + horizontalPadding, iconY, null)
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("InlinePills", "Error drawing MCP icon", e)
+                }
+                
+                // Draw text - same as regular apps
+                val textPaint = android.graphics.Paint(paint).apply {
+                    color = android.graphics.Color.WHITE
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    isAntiAlias = true
+                }
+                val textX = x + horizontalPadding + iconSize + iconTextGap
+                canvas.drawText(text ?: "", start, end, textX, y.toFloat(), textPaint)
+            }
+        }
+    }
+    
     // Detect app names and intent names in text and show pills
     private fun detectAppsInText(text: String) {
+        // PRIORITY CHECK: If we're in MCP app context, show tool pills immediately
+        // Don't do any app detection at all
+        if (currentMcpAppContext != null) {
+            android.util.Log.d("MCP", "In MCP context, showing tool pills for: $currentMcpAppContext")
+            showMcpToolSuggestions(currentMcpAppContext!!)
+            return
+        }
+        
         if (text.isEmpty()) {
             // Show recent apps when text input is cleared (only if browser is not visible)
             if (!isBrowserVisible) {
@@ -849,9 +1146,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         val detectedApps = mutableListOf<AppInfo>()
+        val detectedMcpApps = mutableListOf<McpApp>()
         val textLower = text.lowercase()
 
-        // First, detect app names - only match complete words
+        // First, detect installed app names - only match complete words
         for (app in installedApps) {
             val appNameLower = app.appName.lowercase()
             if (appNameLower.length > 2 && isCompleteWordMatch(textLower, appNameLower)) {
@@ -859,16 +1157,457 @@ class MainActivity : AppCompatActivity() {
             }
         }
         
+        // Also detect MCP apps by name or description keywords
+        detectedMcpApps.addAll(detectMcpAppsInText(textLower))
+        
         // If no apps detected, check for intent action phrases
-        if (detectedApps.isEmpty()) {
+        if (detectedApps.isEmpty() && detectedMcpApps.isEmpty()) {
             detectedApps.addAll(detectIntentInText(textLower))
         }
 
-        if (detectedApps.isNotEmpty()) {
-            showAppSuggestions(detectedApps)
+        // Show suggestions if we detected either installed apps or MCP apps
+        if (detectedApps.isNotEmpty() || detectedMcpApps.isNotEmpty()) {
+            showCombinedAppSuggestions(detectedApps, detectedMcpApps)
         } else {
             suggestionsScrollView.visibility = android.view.View.GONE
         }
+    }
+    
+    // Detect MCP apps in text by name or description keywords
+    private fun detectMcpAppsInText(textLower: String): List<McpApp> {
+        val detectedMcpApps = mutableListOf<McpApp>()
+        
+        // Get all available MCP apps
+        val allMcpApps = AppDirectory.getFeaturedApps()
+        
+        // Check for exact app name matches (complete word)
+        for (app in allMcpApps) {
+            val appNameLower = app.name.lowercase()
+            if (appNameLower.length > 2 && isCompleteWordMatch(textLower, appNameLower)) {
+                detectedMcpApps.add(app)
+                android.util.Log.d("McpAppDetection", "Detected MCP app by name: ${app.name}")
+            }
+        }
+        
+        // If no exact matches, check for keyword matches in description
+        if (detectedMcpApps.isEmpty()) {
+            for (app in allMcpApps) {
+                val keywords = extractKeywords(app.name, app.description)
+                for (keyword in keywords) {
+                    if (keyword.length > 3 && isCompleteWordMatch(textLower, keyword.lowercase())) {
+                        if (!detectedMcpApps.contains(app)) {
+                            detectedMcpApps.add(app)
+                            android.util.Log.d("McpAppDetection", "Detected MCP app by keyword '$keyword': ${app.name}")
+                        }
+                    }
+                }
+            }
+        }
+        
+        return detectedMcpApps
+    }
+    
+    // Extract relevant keywords from app name and description for matching
+    private fun extractKeywords(name: String, description: String): List<String> {
+        val keywords = mutableListOf<String>()
+        
+        // Add individual words from the app name
+        name.split(" ", "-", "_").forEach { word ->
+            if (word.length > 3) {
+                keywords.add(word)
+            }
+        }
+        
+        // Extract key nouns/verbs from description (common domain-specific words)
+        val commonWords = listOf(
+            "pizza", "pizzas", "food", "order", "ordering",
+            "weather", "forecast", "temperature", "climate",
+            "todo", "task", "tasks", "reminder", "reminders",
+            "calendar", "event", "events", "schedule", "meeting",
+            "calculator", "calculate", "math", "equation"
+        )
+        
+        for (word in commonWords) {
+            if (description.lowercase().contains(word)) {
+                keywords.add(word)
+            }
+        }
+        
+        return keywords.distinct()
+    }
+    
+    // Show combined suggestions for both installed apps and MCP apps
+    private fun showCombinedAppSuggestions(installedApps: List<AppInfo>, mcpApps: List<McpApp>) {
+        suggestionsLayout.removeAllViews()
+        
+        // Show installed apps first
+        if (installedApps.size == 1 && mcpApps.isEmpty()) {
+            // Single installed app - show with all intents
+            val app = installedApps[0]
+            val pill = createAppPill(app, "Open")
+            suggestionsLayout.addView(pill)
+            
+            val intentCapabilities = appManager.getAppIntentCapabilities(app.packageName)
+            for (capability in intentCapabilities) {
+                val intentPill = createIntentPill(app, capability)
+                suggestionsLayout.addView(intentPill)
+            }
+        } else {
+            // Multiple apps or mix of installed and MCP apps
+            for (app in installedApps) {
+                val pill = createAppPill(app)
+                suggestionsLayout.addView(pill)
+            }
+            
+            // Show MCP app pills
+            for (mcpApp in mcpApps) {
+                val pill = createMcpAppPill(mcpApp)
+                suggestionsLayout.addView(pill)
+            }
+        }
+        
+        suggestionsScrollView.visibility = android.view.View.VISIBLE
+    }
+    
+    // Create a pill for an MCP app
+    private fun createMcpAppPill(mcpApp: McpApp): android.widget.LinearLayout {
+        val pill = android.widget.LinearLayout(this)
+        pill.orientation = android.widget.LinearLayout.HORIZONTAL
+        pill.gravity = android.view.Gravity.CENTER_VERTICAL
+        val horizontalPaddingPx = (10 * resources.displayMetrics.density).toInt() // Same as regular app pills
+        val verticalPaddingPx = (8 * resources.displayMetrics.density).toInt()
+        pill.setPadding(horizontalPaddingPx, verticalPaddingPx, horizontalPaddingPx, verticalPaddingPx)
+        
+        // Check if app is connected
+        val isConnected = connectedApps.containsKey(mcpApp.id)
+        
+        // Use same background as regular app pills for consistency
+        pill.background = getDrawable(R.drawable.pill_background_compact)
+        
+        // Create icon view (load from URL or use placeholder)
+        val iconView = android.widget.ImageView(this)
+        val iconSizePx = (32 * resources.displayMetrics.density).toInt() // Same size as regular app pills
+        iconView.layoutParams = android.widget.LinearLayout.LayoutParams(iconSizePx, iconSizePx)
+        iconView.scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+        
+        // Load icon from URL if available
+        if (!mcpApp.icon.isNullOrEmpty()) {
+            val imageLoader = coil.ImageLoader(this)
+            val request = coil.request.ImageRequest.Builder(this)
+                .data(mcpApp.icon)
+                .target(iconView)
+                .placeholder(R.drawable.ic_apps)
+                .error(R.drawable.ic_apps)
+                .size(iconSizePx, iconSizePx)
+                .build()
+            imageLoader.enqueue(request)
+        } else {
+            iconView.setImageResource(R.drawable.ic_apps)
+        }
+        
+        // Create text view
+        val textView = android.widget.TextView(this)
+        val status = if (isConnected) " ✓" else ""
+        textView.text = mcpApp.name + status
+        textView.setTextColor(android.graphics.Color.WHITE)
+        textView.textSize = 14f
+        textView.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        val textPaddingPx = (6 * resources.displayMetrics.density).toInt() // Same gap as regular app pills
+        textView.setPadding(textPaddingPx, 0, 0, 0)
+        
+        // Add views to pill
+        pill.addView(iconView)
+        pill.addView(textView)
+        
+        val layoutParams = android.widget.LinearLayout.LayoutParams(
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+        )
+        val rightMarginPx = (16 * resources.displayMetrics.density).toInt() // Same margin as regular app pills
+        layoutParams.setMargins(0, 0, rightMarginPx, 0)
+        pill.layoutParams = layoutParams
+        
+        // Add ripple effect for better touch feedback (same as regular app pills)
+        pill.foreground = getDrawable(android.R.drawable.list_selector_background)
+        
+        // Click handler - insert app name as inline pill and show tools
+        pill.setOnClickListener {
+            // Insert the MCP app name into the text field as an inline pill
+            insertMcpAppIntoText(mcpApp)
+            
+            // Show this MCP app with its tools (or just the app if not connected)
+            android.util.Log.d("McpAppPill", "Showing MCP app details for: ${mcpApp.name}")
+            showSingleMcpAppWithTools(mcpApp)
+        }
+        
+        return pill
+    }
+    
+    // Insert MCP app name into text field with inline pill formatting
+    private fun insertMcpAppIntoText(mcpApp: McpApp) {
+        val currentText = messageInput.text.toString()
+        val cursorPosition = messageInput.selectionStart
+        
+        // Determine where to insert the app name
+        val (insertPosition, textToInsert) = if (currentText.isEmpty()) {
+            // Empty field - just insert the app name
+            Pair(0, mcpApp.name)
+        } else if (cursorPosition == currentText.length) {
+            // At the end - add space before if needed
+            val needsSpace = currentText.isNotEmpty() && !currentText.last().isWhitespace()
+            val prefix = if (needsSpace) " " else ""
+            Pair(currentText.length, prefix + mcpApp.name)
+        } else {
+            // In the middle - add spaces around if needed
+            val needsSpaceBefore = cursorPosition > 0 && !currentText[cursorPosition - 1].isWhitespace()
+            val needsSpaceAfter = cursorPosition < currentText.length && !currentText[cursorPosition].isWhitespace()
+            val prefix = if (needsSpaceBefore) " " else ""
+            val suffix = if (needsSpaceAfter) " " else ""
+            Pair(cursorPosition, prefix + mcpApp.name + suffix)
+        }
+        
+        // Build new text
+        val newText = currentText.substring(0, insertPosition) + textToInsert + currentText.substring(insertPosition)
+        
+        // Set the text and apply inline pills
+        isUpdatingPills = true
+        messageInput.setText(newText)
+        isUpdatingPills = false
+        
+        // Position cursor after the inserted app name
+        val newCursorPosition = insertPosition + textToInsert.length
+        messageInput.setSelection(newCursorPosition)
+        
+        // Trigger app detection to apply inline pill styling
+        applyInlinePills(newText)
+        
+        // Keep focus on input
+        messageInput.requestFocus()
+    }
+    
+    // Show a single MCP app with its tools (similar to showAppSuggestions for regular apps)
+    private fun showSingleMcpAppWithTools(mcpApp: McpApp) {
+        suggestionsLayout.removeAllViews()
+        
+        // Check if app is connected
+        val connectedApp = connectedApps[mcpApp.id]
+        val isConnected = connectedApp != null
+        
+        // Always show the app pill first
+        val appPill = createMcpAppPillForDisplay(mcpApp)
+        suggestionsLayout.addView(appPill)
+        
+        // If connected and has tools, show all tool pills
+        if (isConnected && connectedApp!!.tools.isNotEmpty()) {
+            android.util.Log.d("McpAppPill", "App is connected with ${connectedApp.tools.size} tools")
+            currentMcpAppContext = mcpApp.id
+            
+            // Create a pill for each tool
+            for (tool in connectedApp.tools) {
+                val toolPill = createMcpToolPill(mcpApp.id, tool)
+                suggestionsLayout.addView(toolPill)
+            }
+        } else if (!isConnected) {
+            // Automatically connect to the app
+            android.util.Log.d("McpAppPill", "App is not connected, connecting automatically...")
+            
+            // Show a temporary "Connecting..." pill
+            val connectingPill = createConnectingPill()
+            suggestionsLayout.addView(connectingPill)
+            
+            // Connect in the background
+            connectToMcpApp(mcpApp.id)
+        }
+        
+        suggestionsScrollView.visibility = android.view.View.VISIBLE
+    }
+    
+    // Create a display-only pill for MCP app (doesn't insert into text when clicked)
+    private fun createMcpAppPillForDisplay(mcpApp: McpApp): android.widget.LinearLayout {
+        val pill = android.widget.LinearLayout(this)
+        pill.orientation = android.widget.LinearLayout.HORIZONTAL
+        pill.gravity = android.view.Gravity.CENTER_VERTICAL
+        val horizontalPaddingPx = (10 * resources.displayMetrics.density).toInt()
+        val verticalPaddingPx = (8 * resources.displayMetrics.density).toInt()
+        pill.setPadding(horizontalPaddingPx, verticalPaddingPx, horizontalPaddingPx, verticalPaddingPx)
+        pill.background = getDrawable(R.drawable.pill_background_compact)
+        
+        // Create icon view
+        val iconView = android.widget.ImageView(this)
+        val iconSizePx = (32 * resources.displayMetrics.density).toInt()
+        iconView.layoutParams = android.widget.LinearLayout.LayoutParams(iconSizePx, iconSizePx)
+        iconView.scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+        
+        // Load icon from URL if available
+        if (!mcpApp.icon.isNullOrEmpty()) {
+            val imageLoader = coil.ImageLoader(this)
+            val request = coil.request.ImageRequest.Builder(this)
+                .data(mcpApp.icon)
+                .target(iconView)
+                .placeholder(R.drawable.ic_apps)
+                .error(R.drawable.ic_apps)
+                .size(iconSizePx, iconSizePx)
+                .build()
+            imageLoader.enqueue(request)
+        } else {
+            iconView.setImageResource(R.drawable.ic_apps)
+        }
+        
+        // Create text view
+        val textView = android.widget.TextView(this)
+        textView.text = mcpApp.name
+        textView.setTextColor(android.graphics.Color.WHITE)
+        textView.textSize = 14f
+        textView.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        val textPaddingPx = (6 * resources.displayMetrics.density).toInt()
+        textView.setPadding(textPaddingPx, 0, 0, 0)
+        
+        pill.addView(iconView)
+        pill.addView(textView)
+        
+        val layoutParams = android.widget.LinearLayout.LayoutParams(
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+        )
+        val rightMarginPx = (16 * resources.displayMetrics.density).toInt()
+        layoutParams.setMargins(0, 0, rightMarginPx, 0)
+        pill.layoutParams = layoutParams
+        
+        // Add ripple effect
+        pill.foreground = getDrawable(android.R.drawable.list_selector_background)
+        
+        // This pill doesn't do anything when clicked (just shows app info)
+        pill.setOnClickListener {
+            // Could open app details here if needed
+            android.util.Log.d("McpAppPill", "App pill clicked: ${mcpApp.name}")
+        }
+        
+        return pill
+    }
+    
+    // Create a "Connecting..." pill to show during connection
+    private fun createConnectingPill(): android.widget.LinearLayout {
+        val pill = android.widget.LinearLayout(this)
+        pill.orientation = android.widget.LinearLayout.HORIZONTAL
+        pill.gravity = android.view.Gravity.CENTER_VERTICAL
+        val horizontalPaddingPx = (10 * resources.displayMetrics.density).toInt()
+        val verticalPaddingPx = (8 * resources.displayMetrics.density).toInt()
+        pill.setPadding(horizontalPaddingPx, verticalPaddingPx, horizontalPaddingPx, verticalPaddingPx)
+        pill.background = getDrawable(R.drawable.pill_background_compact)
+        
+        // Create text view
+        val textView = android.widget.TextView(this)
+        textView.text = "Connecting..."
+        textView.setTextColor(android.graphics.Color.parseColor("#AAAAAA")) // Grey text
+        textView.textSize = 14f
+        textView.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        
+        pill.addView(textView)
+        
+        val layoutParams = android.widget.LinearLayout.LayoutParams(
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+        )
+        val rightMarginPx = (16 * resources.displayMetrics.density).toInt()
+        layoutParams.setMargins(0, 0, rightMarginPx, 0)
+        pill.layoutParams = layoutParams
+        
+        return pill
+    }
+    
+    // Create a pill for an MCP tool
+    private fun createMcpToolPill(appId: String, tool: McpTool): android.widget.LinearLayout {
+        val pill = android.widget.LinearLayout(this)
+        pill.orientation = android.widget.LinearLayout.HORIZONTAL
+        pill.gravity = android.view.Gravity.CENTER_VERTICAL
+        val horizontalPaddingPx = (10 * resources.displayMetrics.density).toInt()
+        val verticalPaddingPx = (8 * resources.displayMetrics.density).toInt()
+        pill.setPadding(horizontalPaddingPx, verticalPaddingPx, horizontalPaddingPx, verticalPaddingPx)
+        pill.background = getDrawable(R.drawable.pill_background_compact)
+        
+        // Get the MCP app to use its icon
+        val mcpApp = connectedApps[appId]
+        
+        // Create icon view
+        val iconView = android.widget.ImageView(this)
+        val iconSizePx = (32 * resources.displayMetrics.density).toInt()
+        iconView.layoutParams = android.widget.LinearLayout.LayoutParams(iconSizePx, iconSizePx)
+        iconView.scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+        
+        // Load app icon for the tool
+        if (mcpApp != null && !mcpApp.icon.isNullOrEmpty()) {
+            val imageLoader = coil.ImageLoader(this)
+            val request = coil.request.ImageRequest.Builder(this)
+                .data(mcpApp.icon)
+                .target(iconView)
+                .placeholder(R.drawable.ic_apps)
+                .error(R.drawable.ic_apps)
+                .size(iconSizePx, iconSizePx)
+                .build()
+            imageLoader.enqueue(request)
+        } else {
+            iconView.setImageResource(R.drawable.ic_apps)
+        }
+        
+        // Create text view for tool name
+        val textView = android.widget.TextView(this)
+        textView.text = tool.title ?: tool.name
+        textView.setTextColor(android.graphics.Color.WHITE)
+        textView.textSize = 14f
+        textView.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        val textPaddingPx = (6 * resources.displayMetrics.density).toInt()
+        textView.setPadding(textPaddingPx, 0, 0, 0)
+        
+        pill.addView(iconView)
+        pill.addView(textView)
+        
+        val layoutParams = android.widget.LinearLayout.LayoutParams(
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+        )
+        val rightMarginPx = (16 * resources.displayMetrics.density).toInt()
+        layoutParams.setMargins(0, 0, rightMarginPx, 0)
+        pill.layoutParams = layoutParams
+        
+        // Add ripple effect
+        pill.foreground = getDrawable(android.R.drawable.list_selector_background)
+        
+        // Click to invoke this tool
+        pill.setOnClickListener {
+            android.util.Log.d("McpToolPill", "Tool clicked: ${tool.name}")
+            
+            // Clear the text input field - user has completed their action
+            messageInput.setText("")
+            
+            // Reset MCP app context so we don't keep showing tool pills
+            currentMcpAppContext = null
+            
+            // Hide the suggestion pills
+            suggestionsScrollView.visibility = android.view.View.GONE
+            
+            // Invoke the tool
+            invokeMcpTool(appId, tool.name, null)
+        }
+        
+        return pill
+    }
+    
+    // Show dialog to connect to an MCP app
+    private fun showMcpAppConnectionDialog(mcpApp: McpApp) {
+        val builder = androidx.appcompat.app.AlertDialog.Builder(this)
+        builder.setTitle(mcpApp.name)
+        builder.setMessage("${mcpApp.description}\n\nWould you like to connect to this app?")
+        builder.setPositiveButton("Connect") { _, _ ->
+            connectToMcpApp(mcpApp.id)
+        }
+        builder.setNeutralButton("Details") { _, _ ->
+            // Open app details screen
+            val intent = Intent(this, McpAppDetailsActivity::class.java)
+            intent.putExtra("APP_ID", mcpApp.id)
+            startActivityForResult(intent, REQUEST_CODE_APP_DETAILS)
+        }
+        builder.setNegativeButton("Cancel", null)
+        builder.show()
     }
     
     // Check if a word appears as a complete word in the text (not as part of another word)
@@ -1050,8 +1789,13 @@ class MainActivity : AppCompatActivity() {
         pill.foreground = getDrawable(android.R.drawable.list_selector_background)
         
         pill.setOnClickListener {
-            // Embed the app when pill is clicked
-            embedApp(app.packageName)
+            // Launch the app directly
+            val launchIntent = packageManager.getLaunchIntentForPackage(app.packageName)
+            if (launchIntent != null) {
+                startActivity(launchIntent)
+            } else {
+                android.widget.Toast.makeText(this, "Could not launch ${app.appName}", android.widget.Toast.LENGTH_SHORT).show()
+            }
         }
         
         return pill
@@ -1110,6 +1854,141 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 }
+        
+        return pill
+    }
+    
+    // Show MCP tool suggestions for the current app context
+    private fun showMcpToolSuggestions(appId: String) {
+        suggestionsLayout.removeAllViews()
+        
+        // Get the connected MCP app
+        val mcpApp = connectedApps[appId]
+        if (mcpApp == null || mcpApp.tools.isEmpty()) {
+            suggestionsScrollView.visibility = android.view.View.GONE
+            return
+        }
+        
+        android.util.Log.d("MCP", "Showing tool suggestions for ${mcpApp.name}: ${mcpApp.tools.size} tools")
+        
+        // If we're collecting parameters, show parameter pills first
+        if (activeParameterCollection != null) {
+            val paramState = activeParameterCollection!!
+            android.util.Log.d("MCP", "Parameter collection active, showing parameter pills")
+            
+            // Get tool's input schema
+            val inputSchema = paramState.tool.inputSchema
+            val properties = if (inputSchema.has("properties")) {
+                inputSchema.getJSONObject("properties")
+            } else {
+                org.json.JSONObject()
+            }
+            
+            // Show pills for required parameters that haven't been collected yet
+            for (paramName in paramState.requiredParams) {
+                if (!paramState.collectedParams.containsKey(paramName)) {
+                    val paramSchema = if (properties.has(paramName)) {
+                        properties.getJSONObject(paramName)
+                    } else {
+                        null
+                    }
+                    
+                    val pill = createParameterPill(paramName, paramSchema, required = true)
+                    suggestionsLayout.addView(pill)
+                }
+            }
+            
+            // Also show optional parameters if they exist
+            if (properties.length() > 0) {
+                val allParams = properties.keys().asSequence().toList()
+                val optionalParams = allParams.filter { !paramState.requiredParams.contains(it) }
+                
+                for (paramName in optionalParams) {
+                    if (!paramState.collectedParams.containsKey(paramName)) {
+                        val paramSchema = properties.getJSONObject(paramName)
+                        val pill = createParameterPill(paramName, paramSchema, required = false)
+                        suggestionsLayout.addView(pill)
+                    }
+                }
+            }
+        }
+        
+        // Show all tools as pills
+        for (tool in mcpApp.tools) {
+            val pill = createMcpToolPill(appId, tool)
+            suggestionsLayout.addView(pill)
+        }
+        
+        suggestionsScrollView.visibility = android.view.View.VISIBLE
+    }
+    
+    // Create a pill for a parameter
+    private fun createParameterPill(paramName: String, paramSchema: org.json.JSONObject?, required: Boolean): android.widget.LinearLayout {
+        val pill = android.widget.LinearLayout(this)
+        pill.orientation = android.widget.LinearLayout.HORIZONTAL
+        pill.gravity = android.view.Gravity.CENTER_VERTICAL
+        val horizontalPaddingPx = (10 * resources.displayMetrics.density).toInt()
+        val verticalPaddingPx = (8 * resources.displayMetrics.density).toInt()
+        pill.setPadding(horizontalPaddingPx, verticalPaddingPx, horizontalPaddingPx, verticalPaddingPx)
+        
+        // Use the same background as tool pills
+        pill.background = getDrawable(R.drawable.pill_background_compact)
+        
+        // Create icon view (parameter icon)
+        val iconView = android.widget.ImageView(this)
+        val iconSizePx = (32 * resources.displayMetrics.density).toInt()
+        iconView.layoutParams = android.widget.LinearLayout.LayoutParams(iconSizePx, iconSizePx)
+        iconView.scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+        
+        // Use a settings/parameter icon
+        iconView.setImageResource(android.R.drawable.ic_menu_edit) // Built-in edit/input icon
+        iconView.setColorFilter(android.graphics.Color.WHITE)
+        
+        pill.addView(iconView)
+        
+        // Create text view
+        val textView = android.widget.TextView(this)
+        textView.setTextColor(android.graphics.Color.WHITE)
+        textView.textSize = 14f
+        textView.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        val textPaddingPx = (6 * resources.displayMetrics.density).toInt()
+        textView.setPadding(textPaddingPx, 0, 0, 0)
+        
+        // Format parameter name nicely
+        val displayName = paramName.split("_").joinToString(" ") { it.replaceFirstChar { c -> if (c.isLowerCase()) c.titlecase() else c.toString() } }
+        val description = paramSchema?.optString("description", "") ?: ""
+        
+        // Show parameter name (no special indicators, keep it clean like tool pills)
+        textView.text = displayName
+        
+        pill.addView(textView)
+        
+        // Add layout params with right margin (same as tool pills)
+        val layoutParams = android.widget.LinearLayout.LayoutParams(
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+        )
+        val rightMarginPx = (16 * resources.displayMetrics.density).toInt()
+        layoutParams.setMargins(0, 0, rightMarginPx, 0)
+        pill.layoutParams = layoutParams
+        
+        // Add ripple effect for better touch feedback (same as tool pills)
+        pill.foreground = getDrawable(android.R.drawable.list_selector_background)
+        
+        // When clicked, insert the parameter name/prompt into the input field
+        pill.setOnClickListener {
+            val paramType = paramSchema?.optString("type", "string") ?: "string"
+            val prompt = when (paramType) {
+                "string" -> "I want $displayName: "
+                "number" -> "$displayName: "
+                "boolean" -> if (description?.isNotEmpty() == true) "$description: " else "$displayName: "
+                else -> "$displayName: "
+            }
+            
+            messageInput.setText(prompt)
+            messageInput.setSelection(messageInput.text.length)
+            messageInput.requestFocus()
+        }
         
         return pill
     }
@@ -1234,15 +2113,33 @@ class MainActivity : AppCompatActivity() {
         super.onActivityResult(requestCode, resultCode, data)
 
         when (requestCode) {
-            1001 -> { // Our intent callback
+            1234 -> { // Overlay permission callback
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                    if (Settings.canDrawOverlays(this)) {
+                        // Permission granted, start the floating button
+                        createFloatingOverlay()
+                    } else {
+                        Toast.makeText(this, "Overlay permission denied", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            1001 -> { // Our intent callback (including app details)
                 when (resultCode) {
                     RESULT_OK -> {
-                        // Intent completed successfully
                         if (data != null) {
-                            // Handle returned data (e.g., from ACTION_PICK)
-                            val selectedUri = data.data
-                            if (selectedUri != null) {
-                                android.widget.Toast.makeText(this, "Selected: $selectedUri", android.widget.Toast.LENGTH_SHORT).show()
+                            // Check if this is from app details screen
+                            val action = data.getStringExtra("action")
+                            val appId = data.getStringExtra("app_id")
+                            
+                            if (action == "connect" && appId != null) {
+                                android.util.Log.d("MCP", "Connecting to app from details screen: $appId")
+                                connectToMcpApp(appId)
+                            } else {
+                                // Handle returned data (e.g., from ACTION_PICK)
+                                val selectedUri = data.data
+                                if (selectedUri != null) {
+                                    android.widget.Toast.makeText(this, "Selected: $selectedUri", android.widget.Toast.LENGTH_SHORT).show()
+                                }
                             }
                         } else {
                             android.widget.Toast.makeText(this, "Action completed successfully", android.widget.Toast.LENGTH_SHORT).show()
@@ -1259,6 +2156,13 @@ class MainActivity : AppCompatActivity() {
     
     // Show recently used apps as pills when launcher opens
     private fun showRecentApps() {
+        // PRIORITY CHECK: If we're in MCP app context, show tool pills instead
+        if (currentMcpAppContext != null) {
+            android.util.Log.d("MCP", "In MCP context (showRecentApps), showing tool pills for: $currentMcpAppContext")
+            showMcpToolSuggestions(currentMcpAppContext!!)
+            return
+        }
+        
         // Check if we have usage stats permission
         if (!usageStatsManager.hasUsageStatsPermission()) {
             // Show permission request dialog only once per session
@@ -1405,8 +2309,13 @@ class MainActivity : AppCompatActivity() {
         pill.foreground = getDrawable(android.R.drawable.list_selector_background)
         
         pill.setOnClickListener {
-            // Embed the app when pill is clicked
-            embedApp(app.packageName)
+            // Launch the app directly
+            val launchIntent = packageManager.getLaunchIntentForPackage(app.packageName)
+            if (launchIntent != null) {
+                startActivity(launchIntent)
+            } else {
+                android.widget.Toast.makeText(this, "Could not launch ${app.appName}", android.widget.Toast.LENGTH_SHORT).show()
+            }
         }
         
         return pill
@@ -1419,6 +2328,12 @@ class MainActivity : AppCompatActivity() {
         if (messages != null) {
             // Clear current messages and load the conversation
             chatAdapter.clearMessages()
+            
+            // Clear MCP app context when loading a conversation
+            currentMcpAppContext = null
+            lastInvokedTool = null
+            android.util.Log.d("MCP", "Cleared MCP app context (loading conversation)")
+            
             messages.forEach { message ->
                 chatAdapter.addMessage(message)
             }
@@ -1442,9 +2357,14 @@ class MainActivity : AppCompatActivity() {
         conversationManager.startNewConversation()
         chatAdapter.clearMessages()
         
-        // Don't show welcome message - just show the welcome area like first launch
-        // Show recent apps
+        // Clear MCP app context
+        currentMcpAppContext = null
+        lastInvokedTool = null
+        android.util.Log.d("MCP", "Cleared MCP app context (new conversation)")
+        
+        // Update pills to show recent apps
         showRecentApps()
+        android.util.Log.d("MCP", "Updated pills to show recent apps after starting new conversation")
         
         // Show welcome area
         updateWelcomeAreaVisibility()
@@ -1455,6 +2375,15 @@ class MainActivity : AppCompatActivity() {
     private fun handleIntentExtras() {
         val intent = intent
         android.util.Log.d("MainActivity", "Handling intent extras: ${intent.extras}")
+        android.util.Log.d("MainActivity", "Intent action: ${intent.action}, data: ${intent.data}")
+        
+        // Handle Solana Action / Blink deep link
+        if (intent.action == Intent.ACTION_VIEW && intent.data != null) {
+            val blinkUrl = intent.data.toString()
+            android.util.Log.d("MainActivity", "Received blink URL: $blinkUrl")
+            handleBlinkUrl(blinkUrl)
+            return
+        }
         
         when {
             intent.getBooleanExtra("start_new_chat", false) -> {
@@ -1470,6 +2399,1247 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+    
+    private fun handleBlinkUrl(blinkUrl: String) {
+        android.util.Log.d("MainActivity", "Processing blink URL: $blinkUrl")
+        
+        // Parse the blink URL
+        val actionUrl = blinkService.parseBlinkUrl(blinkUrl)
+        if (actionUrl == null) {
+            android.util.Log.e("MainActivity", "Failed to parse blink URL")
+            Toast.makeText(this, "Invalid Solana Action URL", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        android.util.Log.d("MainActivity", "Parsed action URL: $actionUrl")
+        Toast.makeText(this, "Loading Solana Action...", Toast.LENGTH_SHORT).show()
+        
+        // Fetch metadata in background
+        CoroutineScope(Dispatchers.Main).launch {
+            val startTime = System.currentTimeMillis()
+            
+            val metadata = withContext(Dispatchers.IO) {
+                blinkService.fetchBlinkMetadata(actionUrl)
+            }
+            
+            val fetchTime = (System.currentTimeMillis() - startTime) / 1000.0
+            android.util.Log.d("MainActivity", "Blink metadata fetch completed in ${fetchTime}s")
+            
+            if (metadata == null) {
+                android.util.Log.e("MainActivity", "Failed to fetch blink metadata")
+                Toast.makeText(this@MainActivity, "Failed to load action", Toast.LENGTH_SHORT).show()
+                
+                // Add error message to chat
+                val errorMessage = ChatMessage(
+                    text = "Failed to load Solana Action from $actionUrl",
+                    isUser = false,
+                    messageType = MessageType.TEXT
+                )
+                chatAdapter.addMessage(errorMessage)
+                chatRecyclerView.scrollToPosition(chatAdapter.itemCount - 1)
+                return@launch
+            }
+            
+            android.util.Log.d("MainActivity", "Successfully fetched blink metadata: ${metadata.title}")
+            
+            // Set the blink as a card in the cards overview
+            chatAdapter.setBlinkCard(metadata)
+            
+            // Also add blink as a message to chat (hidden when cards are showing)
+            val blinkMessage = ChatMessage(
+                text = metadata.title,
+                isUser = false,
+                messageType = MessageType.BLINK,
+                blinkMetadata = metadata
+            )
+            
+            chatAdapter.addMessage(blinkMessage)
+            
+            // Show cards view to display the blink card
+            if (!chatAdapter.getShowCards()) {
+                chatAdapter.setShowCards(true)
+            }
+            
+            chatRecyclerView.scrollToPosition(0) // Scroll to top to show the blink card
+            
+            Toast.makeText(this@MainActivity, "Solana Action loaded", Toast.LENGTH_SHORT).show()
+        }
+    }
+    
+    private fun loadTestBlinks() {
+        // List of test blink URLs for development/testing
+        val testBlinkUrls = listOf(
+            "solana-action:https://rps.sendarcade.fun/api/actions/rps?_brf=5056cb65-8e5f-4812-bbfb-c887f555e91f&_bin=9d908db2-5996-4c4c-9650-37530601e8e0",
+            "solana-action:https://sanctum.dial.to/trade/SOL-bonkSOL?_brf=d722f276-6bc6-4391-adef-5058c4d5b5c7&_bin=801cc219-0b70-4d05-ae96-2950b7081f7b",
+            "solana-action:https://bonkblinks.com/api/actions/lock?_brf=a0898550-e7ec-408d-b721-fca000769498&_bin=ffafbecd-bb86-435a-8722-e45bf139eab5"
+        )
+        
+        // Fetch each test blink in the background
+        CoroutineScope(Dispatchers.Main).launch {
+            testBlinkUrls.forEach { blinkUrl ->
+                // Parse the blink URL
+                val actionUrl = blinkService.parseBlinkUrl(blinkUrl)
+                if (actionUrl == null) {
+                    android.util.Log.e("MainActivity", "Failed to parse test blink URL: $blinkUrl")
+                    return@forEach
+                }
+                
+                android.util.Log.d("MainActivity", "Loading test blink: $actionUrl")
+                
+                // Fetch metadata in background
+                val metadata = withContext(Dispatchers.IO) {
+                    blinkService.fetchBlinkMetadata(actionUrl)
+                }
+                
+                if (metadata == null) {
+                    android.util.Log.e("MainActivity", "Failed to fetch test blink metadata: $actionUrl")
+                    return@forEach
+                }
+                
+                android.util.Log.d("MainActivity", "Successfully loaded test blink: ${metadata.title}")
+                
+                // Add blink directly as a card (not as a message)
+                chatAdapter.addDynamicBlinkCard(metadata)
+            }
+            
+            // Ensure cards view is shown to display all blinks
+            if (!chatAdapter.getShowCards()) {
+                chatAdapter.setShowCards(true)
+            }
+            
+            android.util.Log.d("MainActivity", "✅ Test blinks loaded successfully")
+        }
+    }
+    
+    private fun handleBlinkActionExecution(actionHref: String, parameters: Map<String, String>) {
+        android.util.Log.d("MainActivity", "Executing blink action: $actionHref with params: $parameters")
+        
+        Toast.makeText(this, "Connecting to wallet...", Toast.LENGTH_SHORT).show()
+        
+        CoroutineScope(Dispatchers.Main).launch {
+            try {
+                // Step 1: Connect to wallet and get user's public key
+                val walletAddress = walletManager.connectWallet()
+                
+                if (walletAddress == null) {
+                    android.util.Log.e("MainActivity", "Failed to connect to wallet")
+                    Toast.makeText(this@MainActivity, "Failed to connect to wallet", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                
+                android.util.Log.d("MainActivity", "Connected to wallet: $walletAddress")
+                Toast.makeText(this@MainActivity, "Wallet connected, creating transaction...", Toast.LENGTH_SHORT).show()
+                
+                // Step 2: Build the action URL with parameters (if any)
+                var fullActionUrl = actionHref
+                parameters.forEach { (key, value) ->
+                    // Replace {param} placeholders in the URL
+                    fullActionUrl = fullActionUrl.replace("{$key}", value)
+                }
+                
+                android.util.Log.d("MainActivity", "Full action URL: $fullActionUrl")
+                
+                // Step 3: POST request to get the transaction
+                val transactionBase64 = withContext(Dispatchers.IO) {
+                    blinkService.executeBlinkAction(fullActionUrl, walletAddress, parameters)
+                }
+                
+                if (transactionBase64 == null) {
+                    android.util.Log.e("MainActivity", "Failed to get transaction from action")
+                    Toast.makeText(this@MainActivity, "Failed to create transaction", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                
+                android.util.Log.d("MainActivity", "Transaction created, requesting signature...")
+                Toast.makeText(this@MainActivity, "Please sign the transaction...", Toast.LENGTH_SHORT).show()
+                
+                // Step 4: Sign the transaction via wallet (don't send yet)
+                val signedTransaction = walletManager.signTransaction(transactionBase64)
+                
+                if (signedTransaction == null) {
+                    android.util.Log.e("MainActivity", "Failed to sign transaction")
+                    Toast.makeText(this@MainActivity, "Transaction signing failed", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                
+                android.util.Log.d("MainActivity", "Transaction signed, submitting to action endpoint...")
+                Toast.makeText(this@MainActivity, "Submitting transaction...", Toast.LENGTH_SHORT).show()
+                
+                // Step 5: Submit signed transaction back to the action endpoint
+                val signature = withContext(Dispatchers.IO) {
+                    blinkService.submitSignedTransaction(fullActionUrl, signedTransaction, walletAddress)
+                }
+                
+                if (signature == null) {
+                    android.util.Log.e("MainActivity", "Failed to submit signed transaction")
+                    Toast.makeText(this@MainActivity, "Transaction submission failed", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                
+                android.util.Log.d("MainActivity", "Transaction successful! Signature: $signature")
+                Toast.makeText(
+                    this@MainActivity, 
+                    "Transaction successful!\n$signature", 
+                    Toast.LENGTH_LONG
+                ).show()
+                
+                // Add success message to chat
+                val successMessage = ChatMessage(
+                    text = "✅ Transaction successful!\nSignature: $signature",
+                    isUser = false,
+                    messageType = MessageType.TEXT
+                )
+                chatAdapter.addMessage(successMessage)
+                chatRecyclerView.scrollToPosition(chatAdapter.itemCount - 1)
+                
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Error executing blink action: ${e.message}", e)
+                Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+    
+    private fun invokeMcpTool(appId: String, toolName: String, providedParameters: Map<String, Any>? = null) {
+        android.util.Log.d("MCP", "Invoking tool: $toolName from app: $appId")
+        
+        // Get the connected app
+        val app = connectedApps[appId]
+        if (app == null) {
+            android.util.Log.e("MCP", "App not connected: $appId")
+            Toast.makeText(this, "App not connected", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        // Find the tool
+        val tool = app.tools.find { it.name == toolName }
+        if (tool == null) {
+            android.util.Log.e("MCP", "Tool not found: $toolName")
+            Toast.makeText(this, "Tool not found", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        val toolTitle = tool.title ?: tool.name
+        
+        // Set MCP app context for showing relevant tool pills
+        currentMcpAppContext = appId
+        android.util.Log.d("MCP", "Set MCP context to: $appId")
+        
+        // 1. Add user message to chat
+        val userMessage = ChatMessage(
+            text = toolTitle,
+            isUser = true,
+            messageType = MessageType.TEXT
+        )
+        chatAdapter.addMessage(userMessage)
+        chatRecyclerView.scrollToPosition(chatAdapter.itemCount - 1)
+        
+        // 2. Hide cards and show chat
+        chatAdapter.setShowCards(false)
+        cardTypeTabLayout.visibility = View.GONE
+        updateCardsVisibility()
+        
+        // 3. Update pills immediately to show MCP tool pills
+        showMcpToolSuggestions(appId)
+        android.util.Log.d("MCP", "Updated pills to show MCP tools")
+        
+        // 4. Check if tool has required parameters
+        val requiredParams = getRequiredParameters(tool)
+        android.util.Log.d("MCP", "Tool has ${requiredParams.size} required parameters: $requiredParams")
+        
+        // If we have required parameters and no provided parameters, try to infer from conversation
+        if (requiredParams.isNotEmpty() && providedParameters == null) {
+            android.util.Log.d("MCP", "Tool has required params, attempting to extract from conversation history")
+            
+            // Try to extract parameters from conversation history using Grok
+            chatAdapter.showTypingIndicator()
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val inferredParams = inferParametersFromConversation(tool, requiredParams)
+                    
+                    withContext(Dispatchers.Main) {
+                        chatAdapter.hideTypingIndicator()
+                        
+                        if (inferredParams.size == requiredParams.size) {
+                            // All parameters inferred, invoke immediately
+                            android.util.Log.d("MCP", "Successfully inferred all parameters from conversation: $inferredParams")
+                            executeToolInvocation(appId, tool, inferredParams)
+                        } else {
+                            // Some parameters missing, start conversational collection
+                            android.util.Log.d("MCP", "Could not infer all parameters, starting collection. Inferred: $inferredParams")
+                            startParameterCollection(appId, tool, requiredParams, inferredParams)
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("MCP", "Error inferring parameters", e)
+                    withContext(Dispatchers.Main) {
+                        chatAdapter.hideTypingIndicator()
+                        // Fallback to conversational collection
+                        startParameterCollection(appId, tool, requiredParams, emptyMap())
+                    }
+                }
+            }
+            return
+        }
+        
+        // Otherwise, invoke the tool immediately (either no required params, or params already provided)
+        android.util.Log.d("MCP", "Invoking tool immediately (no required params or params provided)")
+        executeToolInvocation(appId, tool, providedParameters)
+    }
+    
+    private fun getRequiredParameters(tool: McpTool): List<String> {
+        val inputSchema = tool.inputSchema
+        val required = if (inputSchema.has("required")) {
+            val reqArray = inputSchema.getJSONArray("required")
+            (0 until reqArray.length()).map { reqArray.getString(it) }
+        } else {
+            emptyList()
+        }
+        return required
+    }
+    
+    private fun startParameterCollection(
+        appId: String, 
+        tool: McpTool, 
+        requiredParams: List<String>,
+        alreadyCollected: Map<String, Any> = emptyMap()
+    ) {
+        android.util.Log.d("MCP", "Starting parameter collection for ${tool.name} with ${alreadyCollected.size} pre-collected params")
+        
+        // Initialize parameter collection state
+        activeParameterCollection = ParameterCollectionState(
+            appId = appId,
+            tool = tool,
+            requiredParams = requiredParams,
+            collectedParams = alreadyCollected.toMutableMap()
+        )
+        android.util.Log.d("MCP", "Active parameter collection state initialized")
+        
+        // Update pills to show parameter suggestions immediately
+        // Pills will communicate what parameters are needed - no verbose message needed
+        showMcpToolSuggestions(appId)
+        
+        // If some parameters were already collected, and all are collected, invoke immediately
+        if (areAllParametersCollected(activeParameterCollection!!)) {
+            android.util.Log.d("MCP", "All parameters already collected! Invoking tool...")
+            executeToolInvocation(appId, tool, alreadyCollected)
+            activeParameterCollection = null
+            // Refresh pills after parameter collection ends
+            showMcpToolSuggestions(appId)
+        }
+        // Otherwise, pills will show what's needed - user will see and respond
+    }
+    
+    private suspend fun continueParameterCollection(userMessage: String): String {
+        val state = activeParameterCollection ?: return "Error: No active parameter collection"
+        
+        android.util.Log.d("MCP", "Continuing parameter collection with user message: $userMessage")
+        
+        // Collect the parameter value directly from user message (no AI generation)
+        for (paramName in state.requiredParams) {
+            if (!state.collectedParams.containsKey(paramName)) {
+                // Assume the user's message is the value for the next missing parameter
+                state.collectedParams[paramName] = userMessage
+                android.util.Log.d("MCP", "Collected parameter '$paramName' = '$userMessage'")
+                break // Only collect one parameter at a time
+            }
+        }
+        
+        android.util.Log.d("MCP", "Updated collected params: ${state.collectedParams}")
+        
+        // Update pills to reflect newly collected parameters
+        withContext(Dispatchers.Main) {
+            currentMcpAppContext?.let { showMcpToolSuggestions(it) }
+        }
+        
+        // Check if all parameters are collected
+        if (areAllParametersCollected(state)) {
+            android.util.Log.d("MCP", "All parameters collected! Invoking tool...")
+            
+            // Invoke the tool with collected parameters
+            withContext(Dispatchers.Main) {
+                executeToolInvocation(state.appId, state.tool, state.collectedParams)
+                activeParameterCollection = null
+                // Refresh pills after parameter collection ends
+                currentMcpAppContext?.let { showMcpToolSuggestions(it) }
+            }
+            
+            // Return a simple confirmation (will be shown as AI message)
+            return "✓"
+        }
+        
+        // If more parameters needed, return a simple prompt for the next one
+        val nextMissingParam = state.requiredParams.find { !state.collectedParams.containsKey(it) }
+        return if (nextMissingParam != null) {
+            "✓" // Just a check mark, pills will show the next parameter
+        } else {
+            "✓"
+        }
+    }
+    
+    private fun extractParametersFromConversation(state: ParameterCollectionState, aiResponse: String) {
+        // Simple extraction: look for key-value patterns in the conversation
+        // In a real implementation, we'd use NLP or have Grok return structured data
+        
+        android.util.Log.d("MCP", "Extracting parameters from conversation")
+        android.util.Log.d("MCP", "Current collected params: ${state.collectedParams}")
+        
+        // For now, we'll use a simple heuristic:
+        // Look at the last user message in history and try to match it with required params
+        val lastUserMessages = state.conversationHistory.filter { it.first == "user" }.map { it.second }
+        
+        if (lastUserMessages.isNotEmpty()) {
+            val lastMessage = lastUserMessages.last()
+            android.util.Log.d("MCP", "Last user message: $lastMessage")
+            
+            // Try to match with required parameters
+            for (paramName in state.requiredParams) {
+                if (!state.collectedParams.containsKey(paramName)) {
+                    // Simple heuristic: assume the last user message is the value for the next missing parameter
+                    state.collectedParams[paramName] = lastMessage
+                    android.util.Log.d("MCP", "Collected parameter '$paramName' = '$lastMessage'")
+                    break // Only collect one parameter at a time
+                }
+            }
+        }
+        
+        android.util.Log.d("MCP", "Updated collected params: ${state.collectedParams}")
+    }
+    
+    private fun areAllParametersCollected(state: ParameterCollectionState): Boolean {
+        val allCollected = state.requiredParams.all { state.collectedParams.containsKey(it) }
+        android.util.Log.d("MCP", "All parameters collected: $allCollected (${state.collectedParams.size}/${state.requiredParams.size})")
+        return allCollected
+    }
+    
+    private fun buildParameterCollectionPrompt(tool: McpTool, requiredParams: List<String>): String {
+        val params = requiredParams.joinToString(", ")
+        return "To use the ${tool.title ?: tool.name} tool, I need the following information: $params. Please provide these details."
+    }
+    
+    private suspend fun inferParametersFromConversation(tool: McpTool, requiredParams: List<String>): Map<String, Any> {
+        android.util.Log.d("MCP", "Attempting to infer parameters from conversation for ${tool.name}")
+        
+        // Build conversation history
+        val conversationHistory = buildConversationHistory()
+        
+        if (conversationHistory.isEmpty()) {
+            android.util.Log.d("MCP", "No conversation history available")
+            return emptyMap()
+        }
+        
+        // Build parameter descriptions
+        val inputSchema = tool.inputSchema
+        val properties = if (inputSchema.has("properties")) {
+            inputSchema.getJSONObject("properties")
+        } else {
+            org.json.JSONObject()
+        }
+        
+        val paramDescriptions = requiredParams.map { paramName ->
+            if (properties.has(paramName)) {
+                val paramSchema = properties.getJSONObject(paramName)
+                val paramDesc = paramSchema.optString("description", "")
+                val paramType = paramSchema.optString("type", "string")
+                "$paramName ($paramType): $paramDesc"
+            } else {
+                paramName
+            }
+        }
+        
+        // Ask Grok to extract parameters from conversation
+        val systemPrompt = """Extract parameters for "${tool.title ?: tool.name}" from the conversation.
+
+Required:
+${paramDescriptions.joinToString("\n") { "- $it" }}
+
+Return ONLY JSON with extracted values. Example: {"topping": "pepperoni"}
+If nothing found: {}"""
+        
+        try {
+            val conversationText = conversationHistory.joinToString("\n") { (role, content) ->
+                "${role.uppercase()}: $content"
+            }
+            
+            val fullPrompt = "$systemPrompt\n\nCONVERSATION:\n$conversationText"
+            
+            val grokResponse = externalAIService.generateResponse(fullPrompt, ModelType.EXTERNAL_GROK)
+            android.util.Log.d("MCP", "Grok parameter inference response: $grokResponse")
+            
+            // Extract JSON from response
+            val jsonMatch = Regex("\\{[^}]*\\}").find(grokResponse)
+            if (jsonMatch != null) {
+                val extractedJson = org.json.JSONObject(jsonMatch.value)
+                val params = mutableMapOf<String, Any>()
+                
+                extractedJson.keys().forEach { key ->
+                    if (requiredParams.contains(key)) {
+                        params[key] = extractedJson.get(key)
+                    }
+                }
+                
+                android.util.Log.d("MCP", "Successfully inferred ${params.size} parameters: $params")
+                return params
+            } else {
+                android.util.Log.e("MCP", "Could not extract JSON from Grok response")
+                return emptyMap()
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MCP", "Error inferring parameters from conversation", e)
+            return emptyMap()
+        }
+    }
+    
+    private suspend fun handleMcpContextMessage(userMessage: String): String {
+        android.util.Log.d("MCP", "Handling message in MCP context: $userMessage")
+        
+        val app = currentMcpAppContext?.let { connectedApps[it] }
+        if (app == null) {
+            android.util.Log.e("MCP", "MCP context app not found")
+            return "Error: App context lost"
+        }
+        
+        // Use Grok to intelligently route the message
+        val routingDecision = analyzeMessageWithGrok(userMessage, app)
+        
+        return when (routingDecision.action) {
+            "invoke_tool" -> {
+                android.util.Log.d("MCP", "Grok decision: Invoke tool '${routingDecision.toolName}'")
+                if (routingDecision.toolName != null) {
+                    withContext(Dispatchers.Main) {
+                        invokeMcpTool(app.id, routingDecision.toolName)
+                    }
+                    "" // Tool invoked, no text response
+                } else {
+                    "I couldn't determine which tool to invoke. Available tools: ${app.tools.joinToString(", ") { it.title ?: it.name }}"
+                }
+            }
+            "modify_parameters" -> {
+                android.util.Log.d("MCP", "Grok decision: Modify parameters")
+                if (lastInvokedTool != null && routingDecision.parameters != null) {
+                    handleToolParameterModification(userMessage, lastInvokedTool!!)
+                } else {
+                    generateContextualResponse(userMessage, app, routingDecision.response)
+                }
+            }
+            "respond" -> {
+                android.util.Log.d("MCP", "Grok decision: Generate response")
+                generateContextualResponse(userMessage, app, routingDecision.response)
+            }
+            else -> {
+                // Fallback
+                generateContextualResponse(userMessage, app, null)
+            }
+        }
+    }
+    
+    private data class RoutingDecision(
+        val action: String,           // "invoke_tool", "modify_parameters", "respond"
+        val toolName: String? = null, // Tool to invoke (if action is invoke_tool)
+        val parameters: Map<String, Any>? = null, // Parameters to modify
+        val response: String? = null  // Response text (if action is respond)
+    )
+    
+    private suspend fun analyzeMessageWithGrok(userMessage: String, app: McpApp): RoutingDecision {
+        // Build tool information for Grok
+        val toolsJson = app.tools.joinToString("\n") { tool ->
+            val paramsJson = if (tool.inputSchema.has("properties")) {
+                val props = tool.inputSchema.getJSONObject("properties")
+                props.keys().asSequence().joinToString(", ")
+            } else {
+                "none"
+            }
+            """  - name: "${tool.name}"
+    title: "${tool.title ?: tool.name}"
+    description: "${tool.description ?: ""}"
+    parameters: [$paramsJson]"""
+        }
+        
+        val lastToolInfo = lastInvokedTool?.let { 
+            "Last invoked tool: ${it.tool.name} with parameters: ${it.lastParameters}"
+        } ?: "No tool invoked yet"
+        
+        val conversationHistory = buildConversationHistory()
+        val recentContext = conversationHistory.takeLast(5).joinToString("\n") { (role, content) ->
+            "$role: $content"
+        }
+        
+        val systemPrompt = """Route user intent for "${app.name}".
+
+Tools:
+$toolsJson
+
+$lastToolInfo
+
+Recent:
+$recentContext
+
+Actions:
+1. invoke_tool - user wants to use/show a tool
+2. modify_parameters - user wants to change current tool params
+3. respond - answer questions, general chat
+
+Return ONLY JSON:
+{
+  "action": "invoke_tool|modify_parameters|respond",
+  "tool_name": "name (if invoke_tool)",
+  "reasoning": "why"
+}
+
+User: "$userMessage"
+Decision:"""
+
+        try {
+            val grokResponse = externalAIService.generateResponse(systemPrompt, ModelType.EXTERNAL_GROK)
+            android.util.Log.d("MCP", "Grok routing response: $grokResponse")
+            
+            // Extract JSON from response
+            val jsonMatch = Regex("\\{[\\s\\S]*?\\}").find(grokResponse)
+            if (jsonMatch != null) {
+                val json = org.json.JSONObject(jsonMatch.value)
+                val action = json.optString("action", "respond")
+                val toolName = json.optString("tool_name", null)
+                val reasoning = json.optString("reasoning", "")
+                
+                android.util.Log.d("MCP", "Parsed decision - Action: $action, Tool: $toolName, Reasoning: $reasoning")
+                
+                // Parse parameters if present
+                val parameters = if (json.has("parameters")) {
+                    val paramsJson = json.getJSONObject("parameters")
+                    val map = mutableMapOf<String, Any>()
+                    paramsJson.keys().forEach { key ->
+                        map[key] = paramsJson.get(key)
+                    }
+                    map
+                } else {
+                    null
+                }
+                
+                return RoutingDecision(
+                    action = action,
+                    toolName = toolName.takeIf { !it.isNullOrEmpty() },
+                    parameters = parameters
+                )
+            } else {
+                android.util.Log.e("MCP", "Could not parse JSON from Grok response")
+                return RoutingDecision(action = "respond")
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MCP", "Error analyzing message with Grok", e)
+            return RoutingDecision(action = "respond")
+        }
+    }
+    
+    private suspend fun generateContextualResponse(
+        userMessage: String, 
+        app: McpApp,
+        suggestedResponse: String?
+    ): String {
+        // If Grok already provided a response, we could use it, but let's generate fresh with full context
+        val toolList = app.tools.joinToString("\n") { tool ->
+            "- **${tool.title ?: tool.name}**: ${tool.description ?: "No description"}"
+        }
+        
+        val mcpContext = """You're helping with the "${app.name}" Mini App.
+
+About: ${app.description}
+
+Tools available:
+$toolList
+
+Keep responses concise. Don't narrate tool actions - the user sees them. Answer questions naturally."""
+
+        val conversationHistory = buildConversationHistory()
+        
+        // Add MCP context as a system message
+        val contextualizedHistory = listOf("system" to mcpContext) + conversationHistory
+        
+        return externalAIService.generateResponseWithHistory(userMessage, ModelType.EXTERNAL_GROK, contextualizedHistory)
+    }
+    
+    private fun buildConversationHistory(): List<Pair<String, String>> {
+        // Get all messages from the chat adapter
+        val messages = chatAdapter.getMessages()
+        
+        // Convert to conversation history format (role, content)
+        // Filter out MCP WebView messages as they're just UI rendering
+        val history = mutableListOf<Pair<String, String>>()
+        
+        for (message in messages) {
+            when (message.messageType) {
+                MessageType.TEXT -> {
+                    val role = if (message.isUser) "user" else "assistant"
+                    history.add(role to message.text)
+                }
+                MessageType.MCP_WEBVIEW -> {
+                    // Skip WebView messages, but could add a summary like:
+                    // history.add("assistant" to "[Displayed ${message.mcpWebViewData?.toolName} result]")
+                    // For now, skip to keep context cleaner
+                }
+                MessageType.BLINK -> {
+                    // Skip blink messages
+                }
+            }
+        }
+        
+        android.util.Log.d("MCP", "Built conversation history: ${history.size} messages from ${messages.size} total messages")
+        return history
+    }
+    
+    private fun shouldReinvokeTool(userMessage: String): Boolean {
+        // Simple heuristic: check if user message contains words indicating a change/modification
+        val modificationKeywords = listOf(
+            "change", "switch", "update", "modify", "different", "instead", 
+            "actually", "wait", "no", "rather", "prefer"
+        )
+        val lowerMessage = userMessage.lowercase()
+        return modificationKeywords.any { lowerMessage.contains(it) }
+    }
+    
+    private suspend fun handleToolParameterModification(userMessage: String, lastTool: LastInvokedTool): String {
+        android.util.Log.d("MCP", "Handling tool parameter modification for: ${lastTool.tool.name}")
+        
+        // Use Grok to extract the new parameter values from the user message
+        val toolSchemaJson = org.json.JSONObject().apply {
+            put("tool_name", lastTool.tool.name)
+            put("tool_title", lastTool.tool.title ?: lastTool.tool.name)
+            put("tool_description", lastTool.tool.description ?: "")
+            put("input_schema", lastTool.tool.inputSchema)
+            put("current_parameters", org.json.JSONObject(lastTool.lastParameters))
+        }
+        
+        // Ask Grok to extract parameter changes from user message
+        val systemPrompt = """Extract parameter changes from user message.
+
+Current parameters: ${lastTool.lastParameters}
+User message: "$userMessage"
+
+Return ONLY JSON with CHANGED values. Example: {"topping": "anchovies"}
+If unclear: {}"""
+        
+        try {
+            val grokResponse = externalAIService.generateResponse(systemPrompt, ModelType.EXTERNAL_GROK)
+            android.util.Log.d("MCP", "Grok parameter extraction response: $grokResponse")
+            
+            // Try to parse JSON from response
+            val jsonMatch = Regex("\\{[^}]+\\}").find(grokResponse)
+            if (jsonMatch != null) {
+                val extractedParams = org.json.JSONObject(jsonMatch.value)
+                android.util.Log.d("MCP", "Extracted parameters: $extractedParams")
+                
+                // Merge with last parameters
+                val updatedParams = lastTool.lastParameters.toMutableMap()
+                extractedParams.keys().forEach { key ->
+                    updatedParams[key] = extractedParams.get(key)
+                }
+                
+                android.util.Log.d("MCP", "Updated parameters: $updatedParams")
+                
+                // Re-invoke the tool with updated parameters
+                withContext(Dispatchers.Main) {
+                    executeToolInvocation(lastTool.appId, lastTool.tool, updatedParams)
+                }
+                
+                return "" // Don't show additional AI response, just re-invoke the tool
+            } else {
+                android.util.Log.e("MCP", "Could not extract JSON from Grok response")
+                return "I couldn't understand which parameter you want to change. Could you be more specific?"
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MCP", "Error handling parameter modification", e)
+            return "Sorry, I encountered an error processing your request: ${e.message}"
+        }
+    }
+    
+    private fun executeToolInvocation(appId: String, tool: McpTool, providedParameters: Map<String, Any>?) {
+        android.util.Log.d("MCP", "Executing tool invocation for: ${tool.name}")
+        
+        // Get the connected app
+        val app = connectedApps[appId]
+        if (app == null) {
+            android.util.Log.e("MCP", "App not connected during execution: $appId")
+            return
+        }
+        
+        // Show typing indicator
+        chatAdapter.showTypingIndicator()
+        
+        // Build arguments: use provided parameters if available, otherwise use defaults
+        val argumentsMap = if (providedParameters != null) {
+            android.util.Log.d("MCP", "Using provided parameters: $providedParameters")
+            providedParameters.toMutableMap()
+        } else {
+            android.util.Log.d("MCP", "Building default arguments from schema")
+            val arguments = buildToolArguments(tool)
+            android.util.Log.d("MCP", "Built arguments: $arguments")
+            
+            // Convert JSONObject to Map
+            val map = mutableMapOf<String, Any>()
+            arguments.keys().forEach { key ->
+                map[key] = arguments.get(key)
+            }
+            map
+        }
+        
+        android.util.Log.d("MCP", "Final arguments for tool invocation: $argumentsMap")
+        android.util.Log.d("MCP", "Output template: ${tool._meta?.get("openai/outputTemplate")}")
+        
+        // Execute tool invocation asynchronously
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                // Call the MCP tool on IO
+                val result = mcpService.callTool(app.serverUrl, tool.name, argumentsMap)
+                android.util.Log.d("MCP", "Tool result: $result")
+                
+                // Get output template from tool metadata
+                val outputTemplate = tool._meta?.get("openai/outputTemplate") as? String
+                
+                if (outputTemplate != null && outputTemplate.startsWith("ui://")) {
+                    // Fetch the UI resource with inline display mode on IO
+                    val resourceUri = outputTemplate
+                    android.util.Log.d("MCP", "Fetching inline resource: $resourceUri")
+                    
+                    val resource = mcpService.readResource(app.serverUrl, resourceUri, displayMode = "inline")
+                    android.util.Log.d("MCP", "Resource fetched: ${resource?.uri}")
+                    
+                    if (resource != null && resource.text != null) {
+                        android.util.Log.d("MCP", "Resource URI: ${resource.uri}, mimeType: ${resource.mimeType}")
+                        
+                        // Build complete HTML document with Skybridge polyfill
+                        val completeHtml = result?.let { buildHtmlWithPolyfill(resource.text!!, it) } ?: ""
+                        
+                        // Add WebView message to chat on Main
+                        withContext(Dispatchers.Main) {
+                            chatAdapter.hideTypingIndicator()
+                            
+                            val webViewMessage = ChatMessage(
+                                text = "", // No text needed
+                                isUser = false,
+                                messageType = MessageType.MCP_WEBVIEW,
+                                mcpWebViewData = McpWebViewData(
+                                    appId = appId,
+                                    toolName = tool.name,
+                                    htmlContent = completeHtml,
+                                    baseUrl = "https://persistent.oaistatic.com/",
+                                    serverUrl = app.serverUrl,
+                                    outputTemplate = outputTemplate,
+                                    toolArguments = argumentsMap
+                                )
+                            )
+                            chatAdapter.addMessage(webViewMessage)
+                            conversationManager.addMessage(webViewMessage)
+                            conversationManager.saveCurrentConversation()
+                            
+                            // Save last invoked tool
+                            lastInvokedTool = LastInvokedTool(appId, tool, argumentsMap)
+                            android.util.Log.d("MCP", "Saved last invoked tool: ${tool.name} with params: $argumentsMap")
+                            
+                            // Scroll to the new message
+                            chatRecyclerView.smoothScrollToPosition(chatAdapter.itemCount - 1)
+                        }
+                    } else {
+                        throw Exception("No resources returned")
+                    }
+                } else {
+                    // No UI template, show text result
+                    throw Exception("No UI template available")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("MCP", "Error invoking tool", e)
+                withContext(Dispatchers.Main) {
+                    chatAdapter.hideTypingIndicator()
+                    val errorMessage = ChatMessage(
+                        text = "Failed to invoke tool: ${e.message}",
+                        isUser = false,
+                        messageType = MessageType.TEXT
+                    )
+                    chatAdapter.addMessage(errorMessage)
+                    chatRecyclerView.smoothScrollToPosition(chatAdapter.itemCount - 1)
+                }
+            }
+        }
+    }
+    
+    private fun buildHtmlWithPolyfill(resourceText: String, toolResult: McpToolResult): String {
+        // Build Skybridge polyfill (similar to McpToolInvocationActivity)
+        val toolInput = org.json.JSONObject()
+        val toolOutput = org.json.JSONObject()
+        
+        // Extract tool output from result
+        try {
+            val firstContent = toolResult.content.firstOrNull()
+            if (firstContent is McpContent.Text) {
+                toolOutput.put("text", firstContent.text)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MCP", "Error extracting tool output", e)
+        }
+        
+        val skybridgePolyfill = """<script>
+(function() {
+    console.log('[Skybridge] Initializing OpenAI global API...');
+    
+    var openaiAPI = {
+        // Layout globals
+        displayMode: 'inline',
+        theme: 'dark',
+        locale: '${java.util.Locale.getDefault().toLanguageTag()}',
+        maxHeight: 99999,
+        safeArea: { insets: { top: 0, bottom: 0, left: 0, right: 0 } },
+        userAgent: { 
+            device: { type: 'mobile', os: 'android', screenWidth: window.screen.width, screenHeight: window.screen.height },
+            capabilities: { hover: false, touch: true, mobile: true, desktop: false }
+        },
+        
+        // State
+        toolInput: $toolInput,
+        toolOutput: $toolOutput,
+        toolResponseMetadata: null,
+        widgetState: null,
+        
+        // API Methods - Exact OpenAI spec
+        callTool: function(name, args) { 
+            console.log('[Skybridge] callTool called:', name, args);
+            if (window.AndroidBridge && window.AndroidBridge.callTool) {
+                window.AndroidBridge.callTool(name, JSON.stringify(args || {}));
+            }
+            return Promise.resolve({ 
+                content: [], 
+                isError: false 
+            });
+        },
+        
+        sendFollowUpMessage: function(payload) { 
+            console.log('[Skybridge] sendFollowUpMessage called:', payload);
+            if (window.AndroidBridge && window.AndroidBridge.sendFollowUpMessage) {
+                window.AndroidBridge.sendFollowUpMessage(payload.prompt || '');
+            }
+            return Promise.resolve();
+        },
+        
+        openExternal: function(payload) { 
+            console.log('[Skybridge] openExternal called:', payload);
+            if (window.AndroidBridge && window.AndroidBridge.openExternal) {
+                window.AndroidBridge.openExternal(payload.href || '');
+            }
+        },
+        
+        requestDisplayMode: function(payload) { 
+            console.log('[Skybridge] requestDisplayMode called:', payload);
+            var requestedMode = payload.mode || 'inline';
+            if (window.AndroidBridge && window.AndroidBridge.requestDisplayMode) {
+                window.AndroidBridge.requestDisplayMode(requestedMode);
+            }
+            // On mobile, PiP is coerced to fullscreen
+            var grantedMode = requestedMode === 'pip' ? 'fullscreen' : requestedMode;
+            return Promise.resolve({ mode: grantedMode });
+        },
+        
+        setWidgetState: function(state) { 
+            console.log('[Skybridge] setWidgetState called:', state);
+            if (window.AndroidBridge && window.AndroidBridge.setWidgetState) {
+                window.AndroidBridge.setWidgetState(JSON.stringify(state || {}));
+            }
+            openaiAPI.widgetState = state;
+            // Dispatch globals update event
+            var event = new CustomEvent('openai:set_globals', { 
+                detail: { globals: { widgetState: state } } 
+            });
+            window.dispatchEvent(event);
+            return Promise.resolve();
+        },
+        
+        sendEvent: function(eventName, data) { 
+            console.log('[Skybridge] sendEvent called:', eventName, data);
+            // Custom events can be dispatched here
+        }
+    };
+    
+    window.openai = openaiAPI;
+    window.webplus = openaiAPI;
+    Object.defineProperty(window, 'openai', { configurable: false, writable: false, value: openaiAPI });
+    
+    // Dispatch initial set_globals event with correct structure
+    var setGlobalsEvent = new CustomEvent('openai:set_globals', { 
+        detail: { globals: openaiAPI } 
+    });
+    var setGlobalsEventWebplus = new CustomEvent('webplus:set_globals', { 
+        detail: { globals: openaiAPI } 
+    });
+    window.dispatchEvent(setGlobalsEvent);
+    window.dispatchEvent(setGlobalsEventWebplus);
+    console.log('[Skybridge] ✓ window.openai and window.webplus initialized');
+    
+    // Redispatch after a brief delay for late-loading scripts
+    setTimeout(function() {
+        window.dispatchEvent(setGlobalsEvent);
+        window.dispatchEvent(setGlobalsEventWebplus);
+    }, 10);
+})();
+</script>"""
+        
+        val earlyStub = """<script>
+window.openai = window.openai || {
+    displayMode: 'inline',
+    theme: 'dark',
+    locale: '${java.util.Locale.getDefault().toLanguageTag()}',
+    maxHeight: 99999,
+    safeArea: { insets: { top: 0, bottom: 0, left: 0, right: 0 } },
+    userAgent: { 
+        device: { type: 'mobile', os: 'android', screenWidth: window.screen.width, screenHeight: window.screen.height },
+        capabilities: { hover: false, touch: true, mobile: true, desktop: false }
+    },
+    toolInput: {},
+    toolOutput: {},
+    toolResponseMetadata: null,
+    widgetState: null,
+    callTool: function() { return Promise.resolve({}) },
+    sendFollowUpMessage: function() { return Promise.resolve() },
+    openExternal: function() {},
+    requestDisplayMode: function() { return Promise.resolve({ mode: 'inline' }) },
+    setWidgetState: function() { return Promise.resolve() },
+    sendEvent: function() {}
+};
+window.webplus = window.openai;
+</script>"""
+        
+        return """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+$earlyStub
+<style>
+body {
+    margin: 0;
+    padding: 0;
+    background-color: #000000;
+    color: #FFFFFF !important;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    max-width: 428px;
+}
+/* Ensure all text elements are visible on dark background */
+* {
+    color: inherit;
+}
+h1, h2, h3, h4, h5, h6, p, span, div, a, button, label {
+    color: #FFFFFF !important;
+}
+/* Override any black text */
+[style*="color: black"],
+[style*="color: #000"],
+[style*="color: rgb(0, 0, 0)"] {
+    color: #FFFFFF !important;
+}
+</style>
+$skybridgePolyfill
+</head>
+<body>
+$resourceText
+</body>
+</html>"""
+    }
+    
+    private fun buildToolArguments(tool: McpTool): org.json.JSONObject {
+        // Build arguments based on the tool's input schema
+        val inputSchema = tool.inputSchema
+        val arguments = org.json.JSONObject()
+        
+        android.util.Log.d("MCP", "========== BUILDING ARGUMENTS FOR ${tool.name} ==========")
+        android.util.Log.d("MCP", "Full input schema: $inputSchema")
+        
+        // Check if the schema has required properties
+        if (inputSchema.has("properties")) {
+            val properties = inputSchema.getJSONObject("properties")
+            val required = if (inputSchema.has("required")) {
+                val reqArray = inputSchema.getJSONArray("required")
+                (0 until reqArray.length()).map { reqArray.getString(it) }.toSet()
+            } else {
+                emptySet()
+            }
+            
+            android.util.Log.d("MCP", "Properties: ${properties.keys().asSequence().toList()}")
+            android.util.Log.d("MCP", "Required fields: $required")
+            
+            // For each property, provide a default value
+            properties.keys().forEach { key ->
+                val property = properties.getJSONObject(key)
+                val type = property.optString("type", "string")
+                val description = property.optString("description", "")
+                
+                android.util.Log.d("MCP", "  Property '$key': type=$type, required=${required.contains(key)}, desc=$description")
+                
+                // Provide default values for ALL fields (not just required)
+                // This ensures the server has complete input
+                when {
+                    key == "pizzaTopping" -> {
+                        arguments.put(key, "pepperoni")
+                        android.util.Log.d("MCP", "    → Set to: pepperoni")
+                    }
+                    key == "latitude" -> {
+                        arguments.put(key, 37.7749) // San Francisco
+                        android.util.Log.d("MCP", "    → Set to: 37.7749")
+                    }
+                    key == "longitude" -> {
+                        arguments.put(key, -122.4194)
+                        android.util.Log.d("MCP", "    → Set to: -122.4194")
+                    }
+                    key == "location" -> {
+                        arguments.put(key, "San Francisco, CA")
+                        android.util.Log.d("MCP", "    → Set to: San Francisco, CA")
+                    }
+                    else -> {
+                        // Provide default based on type for any other field
+                        when (type) {
+                            "string" -> {
+                                arguments.put(key, "default")
+                                android.util.Log.d("MCP", "    → Set to: default (string)")
+                            }
+                            "number", "integer" -> {
+                                arguments.put(key, 1)
+                                android.util.Log.d("MCP", "    → Set to: 1 (number)")
+                            }
+                            "boolean" -> {
+                                arguments.put(key, true)
+                                android.util.Log.d("MCP", "    → Set to: true (boolean)")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        android.util.Log.d("MCP", "Final arguments: $arguments")
+        android.util.Log.d("MCP", "=================================================")
+        
+        return arguments
+    }
+    
+    private fun connectToMcpApp(appId: String) {
+        android.util.Log.d("MCP", "Connecting to MCP app: $appId")
+        
+        // Find the app in the directory
+        val app = AppDirectory.getFeaturedApps().find { it.id == appId }
+        if (app == null) {
+            android.util.Log.e("MCP", "App not found: $appId")
+            Toast.makeText(this, "App not found", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        Toast.makeText(this, "Connecting to ${app.name}...", Toast.LENGTH_SHORT).show()
+        
+        CoroutineScope(Dispatchers.Main).launch {
+            try {
+                // Step 1: Initialize connection with MCP server
+                val capabilities = withContext(Dispatchers.IO) {
+                    mcpService.initialize(app.serverUrl)
+                }
+                
+                if (capabilities == null) {
+                    throw Exception("Failed to initialize connection")
+                }
+                
+                android.util.Log.d("MCP", "Initialized connection to ${app.name}")
+                
+                // Step 2: Fetch tools from MCP server
+                val tools = withContext(Dispatchers.IO) {
+                    mcpService.listTools(app.serverUrl)
+                }
+                
+                android.util.Log.d("MCP", "Fetched ${tools.size} tools from ${app.name}")
+                
+                // Update connected apps
+                val connectedApp = app.copy(
+                    tools = tools,
+                    connectionStatus = ConnectionStatus.CONNECTED
+                )
+                connectedApps[appId] = connectedApp
+                
+                // Refresh the adapter
+                chatAdapter.notifyDataSetChanged()
+                
+                // Refresh the pills to show tools
+                android.util.Log.d("MCP", "Refreshing pills to show tools for ${app.name}")
+                showSingleMcpAppWithTools(connectedApp)
+                
+                Toast.makeText(this@MainActivity, "${app.name} connected with ${tools.size} tools!", Toast.LENGTH_SHORT).show()
+                
+            } catch (e: Exception) {
+                android.util.Log.e("MCP", "Error connecting to ${app.name}: ${e.message}", e)
+                Toast.makeText(this@MainActivity, "Connection failed: ${e.message}", Toast.LENGTH_LONG).show()
+                
+                // Clear the "Connecting..." pill on error
+                suggestionsLayout.removeAllViews()
+                suggestionsScrollView.visibility = android.view.View.GONE
+            }
+        }
+    }
+    
+    private fun handleMcpConnectionLost(serverUrl: String) {
+        android.util.Log.d("MCP", "Handling connection loss for: $serverUrl")
+        
+        // Find the app that was disconnected
+        val disconnectedApp = connectedApps.values.find { it.serverUrl == serverUrl }
+        if (disconnectedApp != null) {
+            android.util.Log.d("MCP", "App disconnected: ${disconnectedApp.name}")
+            
+            // Remove from connected apps
+            connectedApps.remove(disconnectedApp.id)
+            
+            // Refresh UI to show Connect button again
+            chatAdapter.notifyDataSetChanged()
+            
+            // Optionally show a toast
+            Toast.makeText(this, "${disconnectedApp.name} disconnected", Toast.LENGTH_SHORT).show()
+            
+            // Auto-reconnect after 2 seconds
+            CoroutineScope(Dispatchers.Main).launch {
+                delay(2000)
+                android.util.Log.d("MCP", "Auto-reconnecting to ${disconnectedApp.name}...")
+                connectToMcpApp(disconnectedApp.id)
+            }
+        } else {
+            android.util.Log.w("MCP", "Could not find disconnected app for URL: $serverUrl")
+        }
+    }
+    
+    private fun showMcpAppDetails(appId: String) {
+        android.util.Log.d("MCP", "Showing app details for: $appId")
+        
+        // Find the app in the directory
+        val allApps = AppDirectory.getFeaturedApps()
+        val app = allApps.find { it.id == appId }
+        
+        if (app != null) {
+            // Check if app is connected and get tools
+            val connectedApp = connectedApps[appId]
+            val isConnected = connectedApp != null
+            val toolsCount = connectedApp?.tools?.size ?: 0
+            
+            // Prepare tools data for intent
+            val toolNames = connectedApp?.tools?.map { it.name } ?: emptyList()
+            val toolTitles = connectedApp?.tools?.map { it.title ?: it.name } ?: emptyList()
+            val toolDescriptions = connectedApp?.tools?.map { it.description ?: "" } ?: emptyList()
+            
+            // Launch app details activity
+            val intent = Intent(this, McpAppDetailsActivity::class.java).apply {
+                putExtra("app_id", app.id)
+                putExtra("app_name", app.name)
+                putExtra("app_description", app.description)
+                putExtra("app_icon", app.icon)
+                putExtra("app_server_url", app.serverUrl)
+                putExtra("is_connected", isConnected)
+                putExtra("tools_count", toolsCount)
+                putStringArrayListExtra("tool_names", ArrayList(toolNames))
+                putStringArrayListExtra("tool_titles", ArrayList(toolTitles))
+                putStringArrayListExtra("tool_descriptions", ArrayList(toolDescriptions))
+            }
+            startActivityForResult(intent, REQUEST_CODE_APP_DETAILS)
+        } else {
+            android.util.Log.w("MCP", "App not found: $appId")
+            Toast.makeText(this, "App not found", Toast.LENGTH_SHORT).show()
+        }
+    }
+    
     
     private fun updateWelcomeAreaVisibility() {
         val hasMessages = chatAdapter.itemCount > 0
@@ -1738,6 +3908,21 @@ class MainActivity : AppCompatActivity() {
         chatAdapter.setShowCards(shouldShowCards)
         android.util.Log.d("CardsVisibility", "After setShowCards - itemCount: ${chatAdapter.itemCount}")
         
+        // Clear MCP context when returning to cards view
+        if (shouldShowCards) {
+            currentMcpAppContext = null
+            lastInvokedTool = null
+            android.util.Log.d("MCP", "Cleared MCP app context (returned to cards)")
+            
+            // Update pills to show recent apps
+            showRecentApps()
+            android.util.Log.d("MCP", "Updated pills to show recent apps after returning to cards")
+        }
+        
+        // Show/hide tab layout based on cards visibility
+        cardTypeTabLayout.visibility = if (shouldShowCards) View.VISIBLE else View.GONE
+        android.util.Log.d("TabLayout", "Tab layout visibility: ${if (shouldShowCards) "VISIBLE" else "GONE"}")
+        
         // Update swipe refresh state after cards visibility changes
         chatRecyclerView.post {
             updateSwipeRefreshState()
@@ -1759,6 +3944,36 @@ class MainActivity : AppCompatActivity() {
         
         // Load saved jobs
         loadJobs()
+    }
+    
+    private fun setupTabLayout() {
+        // Set up tab selection listener
+        cardTypeTabLayout.addOnTabSelectedListener(object : com.google.android.material.tabs.TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: com.google.android.material.tabs.TabLayout.Tab) {
+                currentTab = when (tab.position) {
+                    0 -> TabType.APPS  // Apps is now first tab
+                    1 -> TabType.BLINKS  // Blinks is now second tab
+                    else -> TabType.APPS
+                }
+                android.util.Log.d("TabLayout", "Tab selected: $currentTab")
+                // Update adapter to filter by tab type
+                chatAdapter.setCardType(currentTab)
+            }
+            
+            override fun onTabUnselected(tab: com.google.android.material.tabs.TabLayout.Tab) {
+                // No action needed
+            }
+            
+            override fun onTabReselected(tab: com.google.android.material.tabs.TabLayout.Tab) {
+                // No action needed
+            }
+        })
+        
+        // Set initial tab to Apps (position 0)
+        cardTypeTabLayout.getTabAt(0)?.select()
+        
+        // Initially hide tabs (they show only when cards are visible)
+        cardTypeTabLayout.visibility = View.GONE
     }
     
     private fun showJobGrid() {

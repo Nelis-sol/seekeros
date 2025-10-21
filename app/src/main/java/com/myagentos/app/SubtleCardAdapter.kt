@@ -16,7 +16,9 @@ data class SubtleCard(
     val imageRes: Int,
     val actionButtonText: String,
     val learnMoreAction: () -> Unit,
-    val actionButtonAction: () -> Unit
+    val actionButtonAction: () -> Unit,
+    val imageUrl: String? = null, // Optional URL for loading images from network
+    val blinkMetadata: BlinkMetadata? = null // Optional blink metadata for action buttons
 )
 
 class SubtleCardAdapter(

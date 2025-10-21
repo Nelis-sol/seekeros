@@ -622,13 +622,42 @@
         app:layout_constraintTop_toBottomOf="@id/webView"
         app:layout_constraintStart_toStartOf="parent" />
 
+    <!-- Tab Layout for Blinks vs Apps (shown only when cards visible) -->
+        <com.google.android.material.tabs.TabLayout
+            android:id="@+id/cardTypeTabLayout"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:visibility="gone"
+            android:background="?android:attr/colorBackground"
+            app:tabMode="fixed"
+            app:tabGravity="fill"
+            app:tabSelectedTextColor="@android:color/white"
+            app:tabTextColor="#888888"
+            app:tabIndicatorColor="@android:color/white"
+            app:tabIndicatorHeight="2dp"
+            app:layout_constraintTop_toBottomOf="@id/hiddenTray"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent">
+            
+            <com.google.android.material.tabs.TabItem
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Apps" />
+                
+            <com.google.android.material.tabs.TabItem
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Blinks" />
+                
+        </com.google.android.material.tabs.TabLayout>
+
     <!-- SwipeRefreshLayout for pull-to-reveal tray -->
     <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
         android:id="@+id/swipeRefreshLayout"
         android:layout_width="0dp"
         android:layout_height="0dp"
-        app:layout_constraintTop_toBottomOf="@id/hiddenTray"
-        app:layout_constraintBottom_toTopOf="@id/inputLayout"
+        app:layout_constraintTop_toBottomOf="@id/cardTypeTabLayout"
+        app:layout_constraintBottom_toTopOf="@id/suggestionsScrollView"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
 
@@ -643,7 +672,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:padding="8dp"
-                android:paddingBottom="120dp"
+                android:paddingBottom="180dp"
                 android:clipToPadding="false"
                 android:paddingTop="16dp" />
 
@@ -686,7 +715,10 @@
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:padding="8dp"
+        android:paddingTop="12dp"
         android:paddingBottom="4dp"
+        android:background="@android:color/black"
+        android:elevation="8dp"
         android:visibility="gone"
         android:scrollbars="none"
         app:layout_constraintBottom_toTopOf="@id/inputLayout"

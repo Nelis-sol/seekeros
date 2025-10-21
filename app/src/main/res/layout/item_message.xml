@@ -32,7 +32,8 @@
                 android:text="User message"
                 android:textColor="@android:color/white"
                 android:textSize="16sp"
-                android:lineSpacingExtra="2dp" />
+                android:lineSpacingExtra="2dp"
+                android:textIsSelectable="true" />
 
         </LinearLayout>
 
@@ -65,7 +66,8 @@
                 android:text="AI message"
                 android:textColor="?android:attr/textColorPrimary"
                 android:textSize="16sp"
-                android:lineSpacingExtra="2dp" />
+                android:lineSpacingExtra="2dp"
+                android:textIsSelectable="true" />
 
         </LinearLayout>
 
