@@ -27,17 +27,19 @@
                 android:scaleType="centerCrop"
                 android:src="@drawable/stock_photo_banner" />
             
-            <!-- Favorite/Star button overlay -->
+            <!-- Favorite/Heart button overlay - LARGE touch target -->
             <ImageButton
                 android:id="@+id/mcpFavoriteButton"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
+                android:layout_width="70dp"
+                android:layout_height="70dp"
                 android:layout_gravity="top|end"
-                android:layout_margin="12dp"
-                android:background="@android:color/transparent"
-                android:src="@android:drawable/btn_star_big_off"
-                android:scaleType="centerInside"
-                android:padding="8dp"
+                android:layout_margin="6dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:src="@drawable/ic_heart_outline"
+                android:scaleType="fitCenter"
+                android:padding="22dp"
+                android:clickable="true"
+                android:focusable="true"
                 android:contentDescription="Add to favorites" />
                 
         </FrameLayout>

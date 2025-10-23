@@ -192,6 +192,21 @@
         app:layout_constraintBottom_toTopOf="@id/inputLayout"
         app:layout_constraintEnd_toEndOf="parent" />
 
+    <!-- Right Tray Overlay (click outside to close) - does NOT cover the tray itself -->
+    <View
+        android:id="@+id/rightTrayOverlay"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:background="#80000000"
+        android:visibility="gone"
+        android:clickable="true"
+        android:focusable="true"
+        android:elevation="5dp"
+        app:layout_constraintTop_toBottomOf="@id/hiddenTray"
+        app:layout_constraintBottom_toTopOf="@id/inputLayout"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/rightTray" />
+
     <!-- Right Tray (revealed on right-edge swipe) -->
     <LinearLayout
         android:id="@+id/rightTray"
@@ -203,7 +218,9 @@
         android:paddingStart="8dp"
         android:paddingEnd="8dp"
         android:background="@drawable/right_tray_left_border"
-        android:elevation="8dp"
+        android:elevation="15dp"
+        android:clickable="true"
+        android:focusable="true"
         app:layout_constraintTop_toBottomOf="@id/hiddenTray"
         app:layout_constraintBottom_toTopOf="@id/inputLayout"
         app:layout_constraintEnd_toEndOf="parent">
@@ -212,7 +229,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Prompts"
+            android:text="Favorites"
             android:textColor="@android:color/white"
             android:textSize="14sp"
             android:textStyle="bold"

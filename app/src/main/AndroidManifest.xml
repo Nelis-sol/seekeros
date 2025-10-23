@@ -3,7 +3,6 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
@@ -24,7 +23,7 @@
         android:theme="@style/Theme.AgentOS"
         tools:targetApi="31">
         <activity
-            android:name=".MainActivity"
+            android:name=".presentation.activity.MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:clearTaskOnLaunch="true"
@@ -48,39 +47,37 @@
             </intent-filter>
         </activity>
         
-        <!-- Transparent Overlay Activity -->
-        <activity
-            android:name=".OverlayActivity"
-            android:exported="false"
-            android:theme="@style/Theme.AgentOS_Overlay"
-            android:excludeFromRecents="true"
-            android:taskAffinity=""
-            android:launchMode="standard" />
-        
         <!-- Conversation History Activity -->
         <activity
-            android:name=".ConversationHistoryActivity"
+            android:name=".presentation.activity.ConversationHistoryActivity"
             android:exported="false"
             android:theme="@style/Theme.AgentOS_Dark"
             android:screenOrientation="portrait" />
         
         <!-- MCP Tool Invocation Activity -->
         <activity
-            android:name=".McpToolInvocationActivity"
+            android:name=".presentation.activity.McpToolInvocationActivity"
             android:exported="false"
             android:theme="@style/Theme.AgentOS_Dark"
             android:screenOrientation="portrait" />
         
         <!-- MCP App Details Activity -->
         <activity
-            android:name=".McpAppDetailsActivity"
+            android:name=".presentation.activity.McpAppDetailsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.AgentOS_Dark"
+            android:screenOrientation="portrait" />
+        
+        <!-- Agent Profile Activity -->
+        <activity
+            android:name=".presentation.activity.AgentProfileActivity"
             android:exported="false"
             android:theme="@style/Theme.AgentOS_Dark"
             android:screenOrientation="portrait" />
         
         <!-- Custom Widget Picker -->
         <activity
-            android:name=".CustomWidgetPickerActivity"
+            android:name=".presentation.activity.CustomWidgetPickerActivity"
             android:exported="false"
             android:theme="@style/Theme.AgentOS_Dark" />
         
@@ -93,11 +90,6 @@
             <meta-data android:name="android.appwidget.provider"
                 android:resource="@xml/agentos_widget_info" />
         </receiver>
-        
-        <!-- Floating Overlay Service -->
-        <service
-            android:name=".FloatingOverlayService"
-            android:exported="false" />
     </application>
 
 </manifest>
