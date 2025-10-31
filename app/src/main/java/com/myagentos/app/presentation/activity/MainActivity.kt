@@ -83,6 +83,7 @@ import com.myagentos.app.presentation.manager.AgentManager
 import com.myagentos.app.util.UIHelpers
 import com.myagentos.app.util.IntentHelpers
 import com.myagentos.app.util.PermissionHelpers
+import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
 
 // Enum for tab types in card overview
 enum class TabType {
@@ -99,7 +100,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var chatAdapter: SimpleChatAdapter
     private lateinit var historyButton: ImageButton
     private lateinit var newChatButton: ImageButton
-    private lateinit var addAgentButton: ImageButton
     private lateinit var widgetDisplayArea: android.widget.ScrollView
     private lateinit var swipeRefreshLayout: androidx.swiperefreshlayout.widget.SwipeRefreshLayout
     private lateinit var hiddenTray: android.widget.LinearLayout
@@ -167,6 +167,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var dialogManager: DialogManager
     private lateinit var favoritesManager: com.myagentos.app.data.manager.FavoritesManager
     private lateinit var agentManager: AgentManager
+    
+    // Solana Mobile Wallet Adapter (for x402 payments)
+    private lateinit var activityResultSender: ActivityResultSender
     
     // Keyboard state variables
     private var isKeyboardVisible = true // Initially true since input is auto-focused
@@ -259,6 +262,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Initialize ActivityResultSender for Mobile Wallet Adapter (must be done early in lifecycle)
+        activityResultSender = ActivityResultSender(this)
         
         // Note: MCP state clearing moved to MCPManager initialization (Phase 4)
         
@@ -487,8 +493,16 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         // Don't force any keyboard state - let it be natural
         
-        // Refresh recent apps when returning to launcher
-        pillsCoordinator.showRecentApps()
+        // Check if we're in an MCP context first
+        val mcpContext = mcpManager.getCurrentContext()
+        if (mcpContext != null) {
+            // We're connected to an MCP app - show its tool pills
+            android.util.Log.d("MainActivity", "Resuming with MCP context: $mcpContext, showing tool pills")
+            pillsCoordinator.showMcpToolSuggestions(mcpContext)
+        } else {
+            // No MCP context - show recent apps
+            pillsCoordinator.showRecentApps()
+        }
     }
 
     private fun setupUI() {
@@ -499,7 +513,6 @@ class MainActivity : AppCompatActivity() {
         suggestionsScrollView = findViewById(R.id.suggestionsScrollView)
         historyButton = findViewById(R.id.historyButton)
         newChatButton = findViewById(R.id.newChatButton)
-        addAgentButton = findViewById(R.id.addAgentButton)
         widgetDisplayArea = findViewById(R.id.widgetDisplayArea)
         swipeRefreshLayout = findViewById(R.id.swipeRefreshLayout)
         hiddenTray = findViewById(R.id.hiddenTray)
@@ -615,11 +628,6 @@ class MainActivity : AppCompatActivity() {
             android.util.Log.d("MCP", "Updated pills to show recent apps after new chat")
         }
         
-        // Setup add agent button (placeholder for now)
-        addAgentButton.setOnClickListener {
-            // TODO: Implement add agent functionality
-            android.widget.Toast.makeText(this, "Add Agent feature coming soon!", android.widget.Toast.LENGTH_SHORT).show()
-        }
         
         // Initialize AgentManager
         agentManager = AgentManager(this)
@@ -733,7 +741,8 @@ class MainActivity : AppCompatActivity() {
         mcpManager = MCPManager(
             context = this,
             mcpRepository = mcpRepository,
-            aiRepository = aiRepository
+            aiRepository = aiRepository,
+            activityResultSender = activityResultSender
         )
         mcpManager.setCallbacks(
             onToolInvoked = { appId, tool ->
@@ -990,8 +999,8 @@ class MainActivity : AppCompatActivity() {
             }
             
             override fun onMcpAppPillClicked(mcpApp: McpApp) {
-                // Show MCP app connection dialog
-                showMcpAppConnectionDialog(mcpApp)
+                // Connect directly without showing confirmation dialog
+                connectToMcpApp(mcpApp.id)
             }
             
             override fun onMcpToolPillClicked(appId: String, tool: McpTool) {
@@ -1464,6 +1473,9 @@ class MainActivity : AppCompatActivity() {
             "solana-action:https://sanctum.dial.to/trade/SOL-bonkSOL?_brf=d722f276-6bc6-4391-adef-5058c4d5b5c7&_bin=801cc219-0b70-4d05-ae96-2950b7081f7b",
             "solana-action:https://bonkblinks.com/api/actions/lock?_brf=a0898550-e7ec-408d-b721-fca000769498&_bin=ffafbecd-bb86-435a-8722-e45bf139eab5"
         )
+        
+        // Clear any existing dynamic blinks to prevent duplicates on activity recreate
+        chatAdapter.clearDynamicBlinkCards()
         
         // Fetch each test blink in the background
         CoroutineScope(Dispatchers.Main).launch {
@@ -2601,35 +2613,133 @@ class MainActivity : AppCompatActivity() {
     }
     
     /**
-     * Setup click listeners for agent profile views
+     * Setup dynamic agent profile display
      */
     private fun setupAgentProfileListeners() {
-        // Agent 1
-        val agent1Profile = findViewById<View>(R.id.agent1Profile)
-        agent1Profile?.setOnClickListener {
-            android.util.Log.d("AgentProfile", "Agent 1 clicked")
-            agentManager.getAgent("agent1")?.let { agent ->
-                agentManager.showAgentProfile(agent)
+        val agentsContainer = findViewById<LinearLayout>(R.id.agentsContainer)
+        
+        // Observe agents from database
+        lifecycleScope.launch {
+            agentManager.getAllAgentsFlow().collect { agents ->
+                withContext(Dispatchers.Main) {
+                    // Clear existing views
+                    agentsContainer.removeAllViews()
+                    
+                    // Add each agent to the container
+                    agents.forEach { agent ->
+                        val agentView = createAgentView(agent)
+                        agentsContainer.addView(agentView)
+                    }
+                    
+                    // Always add the Add Agent button at the end
+                    val addAgentView = createAddAgentButton()
+                    agentsContainer.addView(addAgentView)
+                }
+            }
+        }
+    }
+    
+    /**
+     * Create an agent view dynamically
+     */
+    private fun createAgentView(agent: com.myagentos.app.domain.model.Agent): View {
+        val agentLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = android.view.Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                marginEnd = (14 * resources.displayMetrics.density).toInt()
             }
         }
         
-        // Agent 2
-        val agent2Profile = findViewById<View>(R.id.agent2Profile)
-        agent2Profile?.setOnClickListener {
-            android.util.Log.d("AgentProfile", "Agent 2 clicked")
-            agentManager.getAgent("agent2")?.let { agent ->
-                agentManager.showAgentProfile(agent)
+        // Agent icon
+        val agentIcon = View(this).apply {
+            id = View.generateViewId()
+            layoutParams = LinearLayout.LayoutParams(
+                (40 * resources.displayMetrics.density).toInt(),
+                (40 * resources.displayMetrics.density).toInt()
+            )
+            agent.iconResId?.let { setBackgroundResource(it) }
+            setOnClickListener {
+                lifecycleScope.launch {
+                    agentManager.getAgent(agent.id)?.let { fullAgent ->
+                        agentManager.showAgentProfile(fullAgent)
+                    }
+                }
             }
         }
         
-        // Agent 3
-        val agent3Profile = findViewById<View>(R.id.agent3Profile)
-        agent3Profile?.setOnClickListener {
-            android.util.Log.d("AgentProfile", "Agent 3 clicked")
-            agentManager.getAgent("agent3")?.let { agent ->
-                agentManager.showAgentProfile(agent)
+        // Agent name
+        val agentName = TextView(this).apply {
+            text = agent.name
+            setTextColor(ContextCompat.getColor(context, android.R.color.white))
+            textSize = 10f
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = (3 * resources.displayMetrics.density).toInt()
             }
         }
+        
+        agentLayout.addView(agentIcon)
+        agentLayout.addView(agentName)
+        
+        return agentLayout
+    }
+    
+    /**
+     * Create the Add Agent button
+     */
+    private fun createAddAgentButton(): View {
+        val addAgentLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = android.view.Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+        
+        // Add button
+        val addButton = ImageButton(this).apply {
+            id = View.generateViewId()
+            layoutParams = LinearLayout.LayoutParams(
+                (40 * resources.displayMetrics.density).toInt(),
+                (40 * resources.displayMetrics.density).toInt()
+            )
+            setBackgroundResource(R.drawable.add_agent_background)
+            setImageResource(R.drawable.ic_add)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            val padding = (8 * resources.displayMetrics.density).toInt()
+            setPadding(padding, padding, padding, padding)
+            contentDescription = "Add new agent"
+            setOnClickListener {
+                // Launch agent creation activity
+                val intent = Intent(context, AgentCreationActivity::class.java)
+                startActivityForResult(intent, AgentManager.REQUEST_CODE_CREATE_AGENT)
+            }
+        }
+        
+        // Add label
+        val addLabel = TextView(this).apply {
+            text = "Add"
+            setTextColor(ContextCompat.getColor(context, android.R.color.white))
+            textSize = 10f
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = (3 * resources.displayMetrics.density).toInt()
+            }
+        }
+        
+        addAgentLayout.addView(addButton)
+        addAgentLayout.addView(addLabel)
+        
+        return addAgentLayout
     }
     
     /**
@@ -2689,9 +2799,9 @@ class MainActivity : AppCompatActivity() {
     
     // Show single MCP app with tools (delegated to PillsCoordinator)
     private fun showSingleMcpAppWithTools(mcpApp: McpApp) {
-        // This function is now handled by PillsCoordinator
-        // Keep this stub for compatibility with existing code
         android.util.Log.d("MainActivity", "showSingleMcpAppWithTools called for ${mcpApp.name}")
+        // Show the MCP tool pills using PillsCoordinator
+        pillsCoordinator.showMcpToolSuggestions(mcpApp.id)
     }
 
 }

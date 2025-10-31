@@ -54,6 +54,7 @@ data class JsonRpcError(
  * @param inputSchema JSON Schema defining expected parameters
  * @param outputSchema Optional JSON Schema defining expected output structure
  * @param _meta OpenAI-specific metadata (e.g., outputTemplate, security scopes)
+ * @param payment x402 payment information (if tool requires payment)
  */
 data class McpTool(
     val name: String,
@@ -61,7 +62,8 @@ data class McpTool(
     val description: String,
     val inputSchema: JSONObject,      // JSON Schema
     val outputSchema: JSONObject?,    // Optional JSON Schema
-    val _meta: Map<String, Any>?      // OpenAI extensions
+    val _meta: Map<String, Any>?,      // OpenAI extensions
+    val payment: com.myagentos.app.domain.model.PaymentInfo? = null  // x402 payment info
 )
 
 // Common _meta fields:
@@ -95,7 +97,8 @@ data class McpToolResult(
     val content: List<McpContent>,
     val structuredContent: JSONObject?,
     val isError: Boolean = false,
-    val _meta: Map<String, Any>?
+    val _meta: Map<String, Any>?,
+    val errorData: Any? = null  // Error data from JSON-RPC error (for payment requirements, etc.)
 )
 
 /**

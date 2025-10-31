@@ -446,12 +446,16 @@ class McpService private constructor() {
             
             if (response.error != null) {
                 Log.e(TAG, "Call tool error: ${response.error.message}")
-                // Return error as tool result
+                Log.e(TAG, "Error code: ${response.error.code}")
+                Log.e(TAG, "Error data: ${response.error.data}")
+                
+                // Return error as tool result (preserve error data for payment requirements)
                 return@withContext McpToolResult(
                     content = listOf(McpContent.Text(text = "Error: ${response.error.message}")),
                     structuredContent = null,
                     isError = true,
-                    _meta = null
+                    _meta = null,
+                    errorData = response.error.data  // Preserve error data (contains paymentRequirements for -32001 errors)
                 )
             }
             
@@ -803,6 +807,9 @@ class McpService private constructor() {
                         _meta = if (item.has("_meta")) {
                             val metaObj = item.getJSONObject("_meta")
                             metaObj.keys().asSequence().associateWith { metaObj.get(it) }
+                        } else null,
+                        payment = if (item.has("payment")) {
+                            parsePaymentInfo(item.getJSONObject("payment"))
                         } else null
                     )
                 }
@@ -813,12 +820,45 @@ class McpService private constructor() {
                         description = item["description"] as? String ?: "",
                         inputSchema = JSONObject(item["inputSchema"] as? Map<*, *> ?: emptyMap<String, Any>()),
                         outputSchema = (item["outputSchema"] as? Map<*, *>)?.let { JSONObject(it) },
-                        _meta = item["_meta"] as? Map<String, Any>
+                        _meta = item["_meta"] as? Map<String, Any>,
+                        payment = (item["payment"] as? Map<*, *>)?.let { parsePaymentInfoFromMap(it) }
                     )
                 }
                 else -> null
             }
         }
+    }
+    
+    /**
+     * Parse payment info from JSONObject
+     */
+    private fun parsePaymentInfo(paymentObj: JSONObject): com.myagentos.app.domain.model.PaymentInfo {
+        return com.myagentos.app.domain.model.PaymentInfo(
+            required = paymentObj.optBoolean("required", false),
+            price = paymentObj.optDouble("price", 0.0),
+            currency = paymentObj.optString("currency", "USDC"),
+            description = paymentObj.optString("description", ""),
+            recipient = paymentObj.optString("recipient", null),
+            expiresAt = paymentObj.optString("expiresAt", null),
+            maxSlippage = if (paymentObj.has("maxSlippage")) paymentObj.optDouble("maxSlippage") else null,
+            pricing = paymentObj.optString("pricing", null)
+        )
+    }
+    
+    /**
+     * Parse payment info from Map
+     */
+    private fun parsePaymentInfoFromMap(paymentMap: Map<*, *>): com.myagentos.app.domain.model.PaymentInfo {
+        return com.myagentos.app.domain.model.PaymentInfo(
+            required = paymentMap["required"] as? Boolean ?: false,
+            price = (paymentMap["price"] as? Number)?.toDouble() ?: 0.0,
+            currency = paymentMap["currency"] as? String ?: "USDC",
+            description = paymentMap["description"] as? String ?: "",
+            recipient = paymentMap["recipient"] as? String,
+            expiresAt = paymentMap["expiresAt"] as? String,
+            maxSlippage = (paymentMap["maxSlippage"] as? Number)?.toDouble(),
+            pricing = paymentMap["pricing"] as? String
+        )
     }
     
     /**

@@ -13,6 +13,13 @@ import com.myagentos.app.presentation.adapter.SimpleChatAdapter
 import com.myagentos.app.data.source.AppDirectory
 import com.myagentos.app.domain.repository.McpRepository
 import com.myagentos.app.domain.repository.AIRepository
+import com.myagentos.app.data.payment.X402PaymentHandler
+import com.myagentos.app.presentation.dialog.PaymentConfirmationDialog
+import com.myagentos.app.data.storage.WalletStorage
+import com.myagentos.app.domain.model.PaymentRequirements
+import com.myagentos.app.domain.model.PaymentPrice
+import com.myagentos.app.domain.model.PaymentAsset
+import com.myagentos.app.domain.model.PaymentInfo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -38,7 +45,8 @@ import org.json.JSONObject
 class MCPManager(
     private val context: Context,
     private val mcpRepository: McpRepository,
-    private val aiRepository: AIRepository
+    private val aiRepository: AIRepository,
+    private val activityResultSender: com.solana.mobilewalletadapter.clientlib.ActivityResultSender
 ) {
     
     // State
@@ -46,6 +54,9 @@ class MCPManager(
     private var currentMcpAppContext: String? = null
     private var activeParameterCollection: ParameterCollectionState? = null
     private var lastInvokedTool: InvokedToolState? = null
+    
+    // x402 Payment Handler with real Solana wallet integration
+    private val paymentHandler = X402PaymentHandler(context, activityResultSender)
     
     // Callbacks
     private var onToolInvoked: ((String, McpTool) -> Unit)? = null
@@ -98,6 +109,10 @@ class MCPManager(
                     connectionStatus = ConnectionStatus.CONNECTED
                 )
                 connectedApps[appId] = connectedApp
+                
+                // Set this app as the current MCP context
+                currentMcpAppContext = appId
+                android.util.Log.d("MCPManager", "Set MCP context to: $appId")
                 
                 // Notify listeners
                 onConnectionStatusChanged?.invoke(appId, ConnectionStatus.CONNECTED)
@@ -191,6 +206,17 @@ class MCPManager(
         val requiredParams = getRequiredParameters(tool)
         android.util.Log.e("MCPManager", ">>> Tool has ${requiredParams.size} required parameters: $requiredParams")
         
+        // If tool requires payment, skip parameter collection and invoke directly
+        // The payment flow will handle the first call, and parameters can be collected after
+        if (tool.payment?.required == true) {
+            android.util.Log.e("MCPManager", ">>> Tool requires payment, skipping parameter collection")
+            // Build default parameters for required params
+            val defaultParams = buildDefaultParameters(tool)
+            android.util.Log.e("MCPManager", ">>> Using default parameters: $defaultParams")
+            executeTool(appId, tool, defaultParams, onComplete)
+            return
+        }
+        
         // If we have required parameters and no provided parameters, start collection
         if (requiredParams.isNotEmpty() && providedParameters == null) {
             android.util.Log.e("MCPManager", ">>> Starting parameter collection")
@@ -229,7 +255,7 @@ class MCPManager(
         
         android.util.Log.d("MCPManager", "Final arguments: $argumentsMap")
         
-        // Execute tool asynchronously
+        // Execute tool asynchronously (try first call - may require payment)
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 android.util.Log.e("MCPManager", ">>> Calling mcpRepository.callTool...")
@@ -265,6 +291,46 @@ class MCPManager(
                 } ?: "Tool executed (no result)"
                 
                 android.util.Log.e("MCPManager", ">>> Extracted resultText: ${resultText.take(200)}")
+                android.util.Log.e("MCPManager", ">>> Result isError: ${result?.isError}")
+                android.util.Log.e("MCPManager", ">>> Result errorData: ${result?.errorData}")
+                
+                // Check if result indicates payment required (even though it's a "successful" call)
+                if (result?.isError == true && isPaymentRequiredError(resultText)) {
+                    android.util.Log.e("MCPManager", ">>> Payment required detected in result!")
+                    
+                    // Cancel any active parameter collection since we're handling payment
+                    if (activeParameterCollection != null) {
+                        android.util.Log.e("MCPManager", ">>> Cancelling active parameter collection for payment")
+                        activeParameterCollection = null
+                    }
+                    
+                    // Try to extract payment requirements from error data first
+                    var paymentRequirements = extractPaymentRequirementsFromErrorData(result.errorData)
+                    android.util.Log.e("MCPManager", ">>> Payment requirements from errorData: $paymentRequirements")
+                    
+                    // If errorData is null but tool has payment metadata, use that as fallback
+                    if (paymentRequirements == null && tool.payment != null) {
+                        android.util.Log.e("MCPManager", ">>> Using tool payment metadata as fallback")
+                        paymentRequirements = convertPaymentInfoToRequirements(tool.payment!!)
+                        android.util.Log.e("MCPManager", ">>> Fallback payment requirements: $paymentRequirements")
+                    }
+                    
+                    if (paymentRequirements != null) {
+                        android.util.Log.e("MCPManager", ">>> Connecting to wallet directly (no confirmation dialog)...")
+                        // Connect to wallet immediately and retry with payment
+                        CoroutineScope(Dispatchers.Main).launch {
+                            connectWalletAndRetry(appId, app, tool, argumentsMap, paymentRequirements, onComplete)
+                        }
+                        return@launch
+                    } else {
+                        android.util.Log.e("MCPManager", ">>> Failed to extract payment requirements from result!")
+                        android.util.Log.e("MCPManager", ">>> ErrorData was: ${result.errorData}")
+                        android.util.Log.e("MCPManager", ">>> ErrorData type: ${result.errorData?.javaClass?.name}")
+                        android.util.Log.e("MCPManager", ">>> Tool payment metadata: ${tool.payment}")
+                        
+                        // Fall through to show error message
+                    }
+                }
                 
                 // Store last invoked tool
                 lastInvokedTool = InvokedToolState(
@@ -284,6 +350,39 @@ class MCPManager(
                 
             } catch (e: Exception) {
                 android.util.Log.e("MCPManager", "Tool invocation failed: ${e.message}", e)
+                
+                // Check if this is a payment required error (-32001)
+                android.util.Log.e("MCPManager", ">>> Checking if payment required error...")
+                android.util.Log.e("MCPManager", ">>> Error message: '${e.message}'")
+                android.util.Log.e("MCPManager", ">>> Error class: ${e.javaClass.name}")
+                
+                if (isPaymentRequiredError(e)) {
+                    android.util.Log.e("MCPManager", ">>> Payment required for tool: ${tool.name}")
+                    
+                    // Cancel any active parameter collection since we're handling payment
+                    if (activeParameterCollection != null) {
+                        android.util.Log.e("MCPManager", ">>> Cancelling active parameter collection for payment")
+                        activeParameterCollection = null
+                    }
+                    
+                    // Extract payment requirements from error
+                    val paymentRequirements = extractPaymentRequirements(e)
+                    android.util.Log.e("MCPManager", ">>> Payment requirements extracted: $paymentRequirements")
+                    
+                    if (paymentRequirements != null) {
+                        android.util.Log.e("MCPManager", ">>> Showing payment confirmation dialog...")
+                        // Show payment confirmation and retry with payment
+                        CoroutineScope(Dispatchers.Main).launch {
+                            showPaymentConfirmationAndRetry(appId, app, tool, argumentsMap, paymentRequirements, onComplete)
+                        }
+                        return@launch
+                    } else {
+                        android.util.Log.e("MCPManager", ">>> Failed to extract payment requirements!")
+                    }
+                } else {
+                    android.util.Log.e("MCPManager", ">>> Not a payment required error")
+                }
+                
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, "Tool failed: ${e.message}", Toast.LENGTH_LONG).show()
                     onComplete(false, e.message)
@@ -427,6 +526,50 @@ class MCPManager(
             android.util.Log.e("MCPManager", "Error getting required parameters", e)
             emptyList()
         }
+    }
+    
+    /**
+     * Build default parameters for a tool (for paid tools to skip parameter collection)
+     */
+    private fun buildDefaultParameters(tool: McpTool): Map<String, Any> {
+        val params = mutableMapOf<String, Any>()
+        
+        try {
+            val inputSchema = tool.inputSchema
+            if (inputSchema.has("properties")) {
+                val properties = inputSchema.getJSONObject("properties")
+                val requiredParams = getRequiredParameters(tool)
+                
+                // Only build defaults for required parameters (exclude _payment)
+                requiredParams.forEach { paramName ->
+                    if (paramName != "_payment" && properties.has(paramName)) {
+                        val propertySchema = properties.getJSONObject(paramName)
+                        val description = propertySchema.optString("description", "")
+                        val propertyType = propertySchema.optString("type", "string")
+                        
+                        // Generate reasonable default based on parameter name and description
+                        val defaultValue = when {
+                            paramName.contains("id", ignoreCase = true) -> "default_${System.currentTimeMillis()}"
+                            paramName.contains("name", ignoreCase = true) -> "Default Name"
+                            paramName.contains("place", ignoreCase = true) -> "Joe's Pizza"
+                            else -> when (propertyType) {
+                                "string" -> propertySchema.optString("default", "default_value")
+                                "number" -> propertySchema.optDouble("default", 0.0)
+                                "integer" -> propertySchema.optInt("default", 0)
+                                "boolean" -> propertySchema.optBoolean("default", false)
+                                else -> "default_value"
+                            }
+                        }
+                        
+                        params[paramName] = defaultValue
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MCPManager", "Error building default parameters", e)
+        }
+        
+        return params
     }
     
     /**
@@ -699,6 +842,400 @@ class MCPManager(
         this.onNeedToShowToolPills = onNeedToShowToolPills
         this.chatAdapter = chatAdapter
         this.chatRecyclerView = chatRecyclerView
+    }
+    
+    /**
+     * Check if error is a payment required error (-32001)
+     */
+    private fun isPaymentRequiredError(e: Exception): Boolean {
+        // Check if error message contains payment required indicators
+        val message = e.message ?: ""
+        return isPaymentRequiredError(message)
+    }
+    
+    /**
+     * Check if message indicates payment required
+     */
+    private fun isPaymentRequiredError(message: String): Boolean {
+        return message.contains("Payment required") || 
+               message.contains("-32001") ||
+               message.contains("paymentRequirements")
+    }
+    
+    /**
+     * Convert PaymentInfo (from tool metadata) to PaymentRequirements
+     */
+    private fun convertPaymentInfoToRequirements(paymentInfo: PaymentInfo): PaymentRequirements {
+        return PaymentRequirements(
+            price = PaymentPrice(
+                amount = (paymentInfo.price * 1_000_000).toLong().toString(), // Convert to micro-units
+                asset = PaymentAsset(
+                    address = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU" // USDC devnet
+                )
+            ),
+            recipient = paymentInfo.recipient ?: "BuXm6nD1tWAHwB18AitXdCkYA5Yu3QKoPxJp2Rn7VjGt",
+            description = paymentInfo.description,
+            currency = paymentInfo.currency,
+            network = "solana-devnet"
+        )
+    }
+    
+    /**
+     * Extract payment requirements from error data
+     * 
+     * Parses the JSON structure from MCP server error.data:
+     * {
+     *   "paymentRequirements": {
+     *     "price": { "amount": "15000000", "asset": { "address": "..." } },
+     *     "recipient": "...",
+     *     "description": "...",
+     *     "currency": "USDC",
+     *     "network": "solana-devnet"
+     *   }
+     * }
+     */
+    private fun extractPaymentRequirementsFromErrorData(errorData: Any?): PaymentRequirements? {
+        try {
+            android.util.Log.d("MCPManager", "Extracting payment requirements from error data: $errorData")
+            
+            if (errorData == null) {
+                android.util.Log.w("MCPManager", "Error data is null")
+                return null
+            }
+            
+            // Convert error data to JSONObject if needed
+            val dataObj = when (errorData) {
+                is JSONObject -> errorData
+                is String -> JSONObject(errorData)
+                is Map<*, *> -> JSONObject(errorData as Map<String, Any>)
+                else -> {
+                    android.util.Log.w("MCPManager", "Unknown error data type: ${errorData.javaClass.name}")
+                    return null
+                }
+            }
+            
+            // Extract paymentRequirements object
+            if (!dataObj.has("paymentRequirements")) {
+                android.util.Log.w("MCPManager", "No paymentRequirements in error data")
+                return null
+            }
+            
+            val paymentReqs = dataObj.getJSONObject("paymentRequirements")
+            
+            // Extract price object
+            val priceObj = paymentReqs.getJSONObject("price")
+            val amount = priceObj.getString("amount")
+            val assetObj = priceObj.getJSONObject("asset")
+            val assetAddress = assetObj.getString("address")
+            
+            // Extract other fields
+            val recipient = paymentReqs.getString("recipient")
+            val description = paymentReqs.getString("description")
+            val currency = paymentReqs.getString("currency")
+            val network = paymentReqs.getString("network")
+            
+            android.util.Log.d("MCPManager", "Parsed payment requirements: amount=$amount, recipient=$recipient, currency=$currency")
+            
+            return PaymentRequirements(
+                price = PaymentPrice(
+                    amount = amount,
+                    asset = PaymentAsset(address = assetAddress)
+                ),
+                recipient = recipient,
+                description = description,
+                currency = currency,
+                network = network
+            )
+        } catch (ex: Exception) {
+            android.util.Log.e("MCPManager", "Failed to extract payment requirements from error data: ${ex.message}", ex)
+            return null
+        }
+    }
+    
+    /**
+     * Extract payment requirements from exception
+     * (Fallback for cases where error is thrown rather than returned as McpToolResult)
+     */
+    private fun extractPaymentRequirements(e: Exception): PaymentRequirements? {
+        try {
+            val message = e.message ?: ""
+            android.util.Log.d("MCPManager", "Extracting payment requirements from exception: $message")
+            
+            // Try to parse the error message as JSON
+            // In some cases, the entire error might be thrown as exception
+            if (message.contains("{") && message.contains("paymentRequirements")) {
+                val jsonStart = message.indexOf("{")
+                val jsonEnd = message.lastIndexOf("}") + 1
+                if (jsonStart >= 0 && jsonEnd > jsonStart) {
+                    val jsonStr = message.substring(jsonStart, jsonEnd)
+                    return extractPaymentRequirementsFromErrorData(jsonStr)
+                }
+            }
+            
+            android.util.Log.w("MCPManager", "Could not extract payment requirements from exception message")
+            return null
+        } catch (ex: Exception) {
+            android.util.Log.e("MCPManager", "Failed to extract payment requirements from exception: ${ex.message}")
+            return null
+        }
+    }
+    
+    /**
+     * Connect to wallet immediately and retry tool call with payment proof (skip dialog)
+     */
+    private fun connectWalletAndRetry(
+        appId: String,
+        app: McpApp,
+        tool: McpTool,
+        argumentsMap: Map<String, Any>,
+        paymentRequirements: PaymentRequirements,
+        onComplete: (Boolean, String?) -> Unit
+    ) {
+        // Convert payment requirements to PaymentInfo for wallet
+        val paymentInfo = PaymentInfo(
+            required = true,
+            price = paymentRequirements.price.amount.toDouble() / 1_000_000.0, // Convert micro-units to USDC
+            currency = paymentRequirements.currency,
+            description = paymentRequirements.description,
+            recipient = paymentRequirements.recipient
+        )
+        
+        // Get user's wallet address for payment
+        val walletAddress = WalletStorage.getWalletAddress(context) ?: "unknown_wallet"
+        
+        android.util.Log.e("MCPManager", ">>> Connecting to wallet immediately...")
+        
+        // Immediately connect to wallet and create payment
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                android.util.Log.e("MCPManager", ">>> Creating Solana payment...")
+                
+                // Create real Solana payment using Mobile Wallet Adapter
+                val paymentProof = paymentHandler.createPayment(paymentInfo, walletAddress)
+                android.util.Log.e("MCPManager", ">>> Payment proof created: ${paymentProof.transactionSignature}")
+                
+                // Add payment proof to arguments
+                val argumentsWithPayment = argumentsMap.toMutableMap()
+                argumentsWithPayment["_payment"] = mapOf(
+                    "signature" to paymentProof.transactionSignature,
+                    "timestamp" to java.time.Instant.now().toString(),
+                    "amount" to paymentRequirements.price.amount,
+                    "from" to paymentProof.from
+                )
+                
+                android.util.Log.e("MCPManager", ">>> Retrying tool call with payment proof...")
+                
+                // Retry tool call with payment proof
+                val result = mcpRepository.callTool(app.serverUrl, tool.name, argumentsWithPayment)
+                
+                val resultText = result?.content?.firstOrNull()?.let {
+                    when (it) {
+                        is McpContent.Text -> it.text
+                        else -> "Tool executed successfully"
+                    }
+                } ?: "Tool executed (no result)"
+                
+                // Store last invoked tool
+                lastInvokedTool = InvokedToolState(
+                    appId = appId,
+                    tool = tool,
+                    parameters = argumentsWithPayment,
+                    result = resultText
+                )
+                
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Payment successful! Tool executed.", Toast.LENGTH_SHORT).show()
+                    onToolResultReceived?.invoke(appId, tool, resultText, result, argumentsWithPayment)
+                    onComplete(true, resultText)
+                }
+                
+            } catch (e: Exception) {
+                android.util.Log.e("MCPManager", "Error executing paid tool: ${e.message}", e)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                    onComplete(false, e.message)
+                }
+            }
+        }
+    }
+    
+    /**
+     * Show payment confirmation dialog and retry tool call with payment proof
+     */
+    private fun showPaymentConfirmationAndRetry(
+        appId: String,
+        app: McpApp,
+        tool: McpTool,
+        argumentsMap: Map<String, Any>,
+        paymentRequirements: PaymentRequirements,
+        onComplete: (Boolean, String?) -> Unit
+    ) {
+        // Convert payment requirements to PaymentInfo for dialog
+        val paymentInfo = PaymentInfo(
+            required = true,
+            price = paymentRequirements.price.amount.toDouble() / 1_000_000.0, // Convert micro-units to USDC
+            currency = paymentRequirements.currency,
+            description = paymentRequirements.description,
+            recipient = paymentRequirements.recipient
+        )
+        
+        // Get user's wallet address for payment
+        val walletAddress = WalletStorage.getWalletAddress(context) ?: "unknown_wallet"
+        
+        // Create and show payment confirmation dialog
+        val dialog = PaymentConfirmationDialog(
+            context = context,
+            toolName = tool.title ?: tool.name,
+            paymentInfo = paymentInfo,
+            onPaymentApproved = {
+                // User approved payment - create real Solana payment and retry
+                android.util.Log.e("MCPManager", ">>> Payment approved by user")
+                
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        android.util.Log.e("MCPManager", ">>> Creating Solana payment...")
+                        
+                        // Create real Solana payment using Mobile Wallet Adapter
+                        val paymentProof = paymentHandler.createPayment(paymentInfo, walletAddress)
+                        android.util.Log.e("MCPManager", ">>> Payment proof created: ${paymentProof.transactionSignature}")
+                        
+                        // Add payment proof to arguments
+                        val argumentsWithPayment = argumentsMap.toMutableMap()
+                        argumentsWithPayment["_payment"] = mapOf(
+                            "signature" to paymentProof.transactionSignature,
+                            "timestamp" to java.time.Instant.now().toString(),
+                            "amount" to paymentRequirements.price.amount,
+                            "from" to paymentProof.from
+                        )
+                        
+                        android.util.Log.e("MCPManager", ">>> Retrying tool call with payment proof...")
+                        
+                        // Retry tool call with payment proof
+                        val result = mcpRepository.callTool(app.serverUrl, tool.name, argumentsWithPayment)
+                        
+                        val resultText = result?.content?.firstOrNull()?.let {
+                            when (it) {
+                                is McpContent.Text -> it.text
+                                else -> "Tool executed successfully"
+                            }
+                        } ?: "Tool executed (no result)"
+                        
+                        // Store last invoked tool
+                        lastInvokedTool = InvokedToolState(
+                            appId = appId,
+                            tool = tool,
+                            parameters = argumentsWithPayment,
+                            result = resultText
+                        )
+                        
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "Payment successful! Tool executed.", Toast.LENGTH_SHORT).show()
+                            onToolResultReceived?.invoke(appId, tool, resultText, result, argumentsWithPayment)
+                            onComplete(true, resultText)
+                        }
+                        
+                    } catch (e: Exception) {
+                        android.util.Log.e("MCPManager", "Error executing paid tool: ${e.message}", e)
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                            onComplete(false, e.message)
+                        }
+                    }
+                }
+            },
+            onPaymentDeclined = {
+                // User declined payment
+                android.util.Log.e("MCPManager", ">>> Payment declined by user")
+                Toast.makeText(context, "Payment declined", Toast.LENGTH_SHORT).show()
+                onComplete(false, "Payment declined")
+            }
+        )
+        
+        dialog.show()
+    }
+    
+    /**
+     * Show payment confirmation dialog and execute tool if approved (x402 protocol)
+     */
+    private fun showPaymentConfirmationAndExecute(
+        appId: String,
+        app: McpApp,
+        tool: McpTool,
+        argumentsMap: Map<String, Any>,
+        onComplete: (Boolean, String?) -> Unit
+    ) {
+        val paymentInfo = tool.payment ?: run {
+            android.util.Log.e("MCPManager", "Payment info is null!")
+            onComplete(false, "Payment information missing")
+            return
+        }
+        
+        // Get user's wallet address for payment
+        val walletAddress = WalletStorage.getWalletAddress(context) ?: "unknown_wallet"
+        
+        // Create and show payment confirmation dialog
+        val dialog = PaymentConfirmationDialog(
+            context = context,
+            toolName = tool.title ?: tool.name,
+            paymentInfo = paymentInfo,
+            onPaymentApproved = {
+                // User approved payment - create REAL payment using Solana wallet
+                android.util.Log.e("MCPManager", ">>> Payment approved by user")
+                
+                // Execute tool with payment proof
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        android.util.Log.e("MCPManager", ">>> Creating Solana payment...")
+                        
+                        // Create real Solana payment using Mobile Wallet Adapter
+                        val paymentProof = paymentHandler.createPayment(paymentInfo, walletAddress)
+                        android.util.Log.e("MCPManager", ">>> Payment proof created: ${paymentProof.transactionSignature}")
+                        
+                        android.util.Log.e("MCPManager", ">>> Executing paid tool...")
+                        
+                        // TODO: In production, pass payment proof to MCP server in X-PAYMENT header
+                        // For now, we just execute the tool normally
+                        val result = mcpRepository.callTool(app.serverUrl, tool.name, argumentsMap)
+                        
+                        val resultText = result?.content?.firstOrNull()?.let {
+                            when (it) {
+                                is McpContent.Text -> it.text
+                                else -> "Tool executed successfully"
+                            }
+                        } ?: "Tool executed (no result)"
+                        
+                        // Store last invoked tool
+                        lastInvokedTool = InvokedToolState(
+                            appId = appId,
+                            tool = tool,
+                            parameters = argumentsMap,
+                            result = resultText
+                        )
+                        
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "Payment successful! Tool executed.", Toast.LENGTH_SHORT).show()
+                            onToolResultReceived?.invoke(appId, tool, resultText, result, argumentsMap)
+                            onComplete(true, resultText)
+                        }
+                        
+                    } catch (e: Exception) {
+                        android.util.Log.e("MCPManager", "Error executing paid tool: ${e.message}", e)
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                            onComplete(false, e.message)
+                        }
+                    }
+                }
+            },
+            onPaymentDeclined = {
+                // User declined payment
+                android.util.Log.e("MCPManager", ">>> Payment declined by user")
+                Toast.makeText(context, "Payment declined", Toast.LENGTH_SHORT).show()
+                onComplete(false, "Payment declined")
+            }
+        )
+        
+        dialog.show()
     }
 }
 

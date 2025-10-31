@@ -700,6 +700,17 @@ class PillsCoordinator(
         pill.addView(iconView)
         pill.addView(textView)
         
+        // Add payment indicator if tool requires payment
+        if (tool.payment?.required == true) {
+            val paymentIndicator = TextView(context)
+            paymentIndicator.text = "💰"
+            paymentIndicator.setTextColor(Color.parseColor("#FFAA00"))
+            paymentIndicator.textSize = 12f
+            val paymentPaddingPx = (4 * context.resources.displayMetrics.density).toInt()
+            paymentIndicator.setPadding(paymentPaddingPx, 0, 0, 0)
+            pill.addView(paymentIndicator)
+        }
+        
         val layoutParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,
             LinearLayout.LayoutParams.WRAP_CONTENT

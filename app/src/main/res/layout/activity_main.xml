@@ -21,113 +21,26 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
 
-        <!-- Agent Profiles Section -->
-        <LinearLayout
+        <!-- Agent Profiles Section (Dynamic) -->
+        <HorizontalScrollView
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:orientation="horizontal"
-            android:gravity="start|center_vertical">
+            android:scrollbars="none">
 
-            <!-- Agent 1 -->
             <LinearLayout
+                android:id="@+id/agentsContainer"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:gravity="center"
-                android:layout_marginEnd="14dp">
+                android:orientation="horizontal"
+                android:gravity="start|center_vertical">
                 
-                <View
-                    android:id="@+id/agent1Profile"
-                    android:layout_width="40dp"
-                    android:layout_height="40dp"
-                    android:background="@drawable/agent_profile_background" />
-                
-                <TextView
-                    android:id="@+id/agent1Name"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Agent 1"
-                    android:textColor="@android:color/white"
-                    android:textSize="10sp"
-                    android:layout_marginTop="3dp" />
+                <!-- Agents will be added here dynamically -->
+                <!-- Add Agent button will always be at the end -->
+
             </LinearLayout>
 
-            <!-- Agent 2 -->
-            <LinearLayout
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:gravity="center"
-                android:layout_marginEnd="14dp">
-                
-                <View
-                    android:id="@+id/agent2Profile"
-                    android:layout_width="40dp"
-                    android:layout_height="40dp"
-                    android:background="@drawable/agent_profile_background_2" />
-                
-                <TextView
-                    android:id="@+id/agent2Name"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Agent 2"
-                    android:textColor="@android:color/white"
-                    android:textSize="10sp"
-                    android:layout_marginTop="3dp" />
-            </LinearLayout>
-
-            <!-- Agent 3 -->
-            <LinearLayout
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:gravity="center"
-                android:layout_marginEnd="14dp">
-                
-                <View
-                    android:id="@+id/agent3Profile"
-                    android:layout_width="40dp"
-                    android:layout_height="40dp"
-                    android:background="@drawable/agent_profile_background_3" />
-                
-                <TextView
-                    android:id="@+id/agent3Name"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Agent 3"
-                    android:textColor="@android:color/white"
-                    android:textSize="10sp"
-                    android:layout_marginTop="3dp" />
-            </LinearLayout>
-
-            <!-- Add Agent Button -->
-            <LinearLayout
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:gravity="center">
-                
-                <ImageButton
-                    android:id="@+id/addAgentButton"
-                    android:layout_width="40dp"
-                    android:layout_height="40dp"
-                    android:background="@drawable/add_agent_background"
-                    android:src="@drawable/ic_add"
-                    android:scaleType="centerInside"
-                    android:padding="8dp"
-                    android:contentDescription="Add new agent" />
-                
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Add"
-                    android:textColor="@android:color/white"
-                    android:textSize="10sp"
-                    android:layout_marginTop="3dp" />
-            </LinearLayout>
-
-        </LinearLayout>
+        </HorizontalScrollView>
 
         <!-- Buttons Section -->
         <LinearLayout
@@ -794,7 +707,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:hint="Search apps or type message..."
+            android:hint="Search apps or ask a question"
             android:background="@drawable/input_background"
             android:padding="14dp"
             android:textSize="14sp"

@@ -1,228 +1,93 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="#000000"
-    android:fillViewport="true">
+    android:orientation="vertical">
 
+    <!-- Header with Agent Icon and Back Button -->
+    <FrameLayout
+        android:id="@+id/headerBanner"
+        android:layout_width="match_parent"
+        android:layout_height="200dp"
+        android:background="#1C1C1E">
+
+        <!-- Agent Icon (Large, centered) -->
+        <ImageView
+            android:id="@+id/agentIconLarge"
+            android:layout_width="120dp"
+            android:layout_height="120dp"
+            android:layout_gravity="center"
+            android:background="@drawable/agent_profile_background"
+            android:contentDescription="Agent Icon" />
+
+        <!-- Back button overlay -->
+        <Button
+            android:id="@+id/backButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_margin="16dp"
+            android:text="←"
+            android:textColor="@android:color/white"
+            android:textSize="24sp"
+            android:background="#801C1C1E"
+            android:padding="0dp" />
+
+    </FrameLayout>
+
+    <!-- Agent Name and Creator -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical">
+        android:orientation="vertical"
+        android:padding="16dp">
 
-        <!-- Branded Header Banner -->
-        <FrameLayout
-            android:id="@+id/headerBanner"
-            android:layout_width="match_parent"
-            android:layout_height="200dp"
-            android:background="#1C1C1E">
-
-            <!-- Agent Icon (Large, centered) -->
-            <ImageView
-                android:id="@+id/agentIconLarge"
-                android:layout_width="120dp"
-                android:layout_height="120dp"
-                android:layout_gravity="center"
-                android:background="@drawable/agent_profile_background"
-                android:contentDescription="Agent Icon" />
-
-            <!-- Back button overlay -->
-            <Button
-                android:id="@+id/backButton"
-                android:layout_width="48dp"
-                android:layout_height="48dp"
-                android:layout_margin="16dp"
-                android:text="←"
-                android:textColor="@android:color/white"
-                android:textSize="24sp"
-                android:background="#801C1C1E"
-                android:padding="0dp" />
-
-        </FrameLayout>
-
-        <!-- Agent Info Section -->
-        <LinearLayout
-            android:layout_width="match_parent"
+        <TextView
+            android:id="@+id/agentName"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="16dp">
+            android:text="Agent Name"
+            android:textColor="@android:color/white"
+            android:textSize="28sp"
+            android:textStyle="bold"
+            android:layout_gravity="center_horizontal" />
 
-            <!-- Agent Name -->
-            <TextView
-                android:id="@+id/agentName"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Agent Name"
-                android:textColor="@android:color/white"
-                android:textSize="28sp"
-                android:textStyle="bold"
-                android:layout_gravity="center_horizontal" />
-
-            <!-- Creator -->
-            <TextView
-                android:id="@+id/agentCreator"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="by Creator"
-                android:textColor="#888888"
-                android:textSize="14sp"
-                android:layout_gravity="center_horizontal" />
-
-        </LinearLayout>
-
-        <!-- Divider -->
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginStart="32dp"
-            android:layout_marginEnd="32dp"
-            android:layout_marginTop="8dp"
-            android:layout_marginBottom="8dp"
-            android:background="@drawable/section_divider" />
-
-        <!-- Description Section -->
-        <LinearLayout
-            android:layout_width="match_parent"
+        <TextView
+            android:id="@+id/agentCreator"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="16dp">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="About"
-                android:textColor="@android:color/white"
-                android:textSize="18sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/agentDescription"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="Agent description"
-                android:textColor="#CCCCCC"
-                android:textSize="14sp"
-                android:lineSpacingExtra="4dp" />
-
-        </LinearLayout>
-
-        <!-- Action Buttons Row (Add wallet + Generate email) -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="16dp"
-            android:layout_marginEnd="16dp"
-            android:layout_marginTop="16dp"
-            android:layout_marginBottom="8dp"
-            android:orientation="horizontal"
-            android:gravity="center">
-
-            <!-- Add Wallet Button -->
-            <Button
-                android:id="@+id/addWalletButton"
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="48dp"
-                android:layout_marginEnd="8dp"
-                android:text="+ Add wallet"
-                android:textColor="#888888"
-                android:textSize="14sp"
-                android:textStyle="bold"
-                android:background="@drawable/primary_button_background"
-                android:textAllCaps="false" />
-
-            <!-- Generate Email Button -->
-            <Button
-                android:id="@+id/generateEmailButton"
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="48dp"
-                android:text="Generate email"
-                android:textColor="#888888"
-                android:textSize="14sp"
-                android:textStyle="bold"
-                android:background="@drawable/primary_button_background"
-                android:textAllCaps="false" />
-
-        </LinearLayout>
-
-        <!-- Divider -->
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginStart="32dp"
-            android:layout_marginEnd="32dp"
-            android:layout_marginTop="16dp"
-            android:layout_marginBottom="16dp"
-            android:background="@drawable/section_divider" />
-
-        <!-- Personality Prompt Section -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="16dp">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Personality Prompt"
-                android:textColor="@android:color/white"
-                android:textSize="18sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/agentPersonalityPrompt"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="Personality prompt text"
-                android:textColor="#CCCCCC"
-                android:textSize="13sp"
-                android:lineSpacingExtra="4dp" />
-
-        </LinearLayout>
-
-        <!-- Divider -->
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginStart="32dp"
-            android:layout_marginEnd="32dp"
-            android:layout_marginTop="16dp"
-            android:layout_marginBottom="16dp"
-            android:background="@drawable/section_divider" />
-
-        <!-- System Prompt Section -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="16dp">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="System Prompt"
-                android:textColor="@android:color/white"
-                android:textSize="18sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/agentSystemPrompt"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="System prompt text"
-                android:textColor="#CCCCCC"
-                android:textSize="13sp"
-                android:lineSpacingExtra="4dp" />
-
-        </LinearLayout>
+            android:layout_marginTop="4dp"
+            android:text="by Creator"
+            android:textColor="#888888"
+            android:textSize="14sp"
+            android:layout_gravity="center_horizontal" />
 
     </LinearLayout>
-</ScrollView>
 
+    <!-- Tab Layout -->
+    <com.google.android.material.tabs.TabLayout
+        android:id="@+id/tabLayout"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#000000"
+        app:tabTextColor="#888888"
+        app:tabSelectedTextColor="@android:color/white"
+        app:tabIndicatorColor="@android:color/white"
+        app:tabMode="fixed"
+        app:tabGravity="fill" />
+
+    <!-- Subtle divider below tabs -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@drawable/section_divider" />
+
+    <!-- ViewPager for Tab Content -->
+    <androidx.viewpager2.widget.ViewPager2
+        android:id="@+id/viewPager"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+</LinearLayout>

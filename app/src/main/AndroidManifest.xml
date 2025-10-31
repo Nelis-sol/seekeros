@@ -38,6 +38,11 @@
                 <category android:name="android.intent.category.HOME" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
+            <!-- App launcher intent filter (for app drawer) -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
             <!-- Solana Action deep link -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -71,6 +76,13 @@
         <!-- Agent Profile Activity -->
         <activity
             android:name=".presentation.activity.AgentProfileActivity"
+            android:exported="false"
+            android:theme="@style/Theme.AgentOS_Dark"
+            android:screenOrientation="portrait" />
+        
+        <!-- Agent Creation Activity -->
+        <activity
+            android:name=".presentation.activity.AgentCreationActivity"
             android:exported="false"
             android:theme="@style/Theme.AgentOS_Dark"
             android:screenOrientation="portrait" />

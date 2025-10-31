@@ -207,39 +207,38 @@ class SimpleChatAdapter(
     }
     
     override fun getItemViewType(position: Int): Int {
+        val isAppsTab = currentCardType == TabType.APPS
+        if (showCards && isAppsTab) {
+            // Apps tab: only show MCP app cards first, then messages
+            val appCardsCount = getMcpAppCards().size
+            val type = if (position < appCardsCount) TYPE_MCP_APP_CARD
+            else {
+                val msgIndex = position - appCardsCount
+                if (msgIndex >= 0 && msgIndex < messages.size) {
+                    val message = messages[msgIndex]
+                    if (message.messageType == MessageType.MCP_WEBVIEW) TYPE_MCP_WEBVIEW else TYPE_MESSAGE
+                } else TYPE_MESSAGE
+            }
+            android.util.Log.e("SimpleChatAdapter", "getItemViewType(APPS position=$position): type=$type")
+            return type
+        }
+
         val hasBlinkCard = showCards && blinkCard != null
         val blinkCardCount = if (hasBlinkCard) 1 else 0
-        
-        // On APPS tab, use MCP app card layout
-        val isAppsTab = currentCardType == TabType.APPS
-        val cardType = if (isAppsTab) TYPE_MCP_APP_CARD else TYPE_CARD
-        
+        val cardType = TYPE_CARD
+
         val type = when {
-            !showCards && messages.isEmpty() && position == 0 -> TYPE_WELCOME_HEADER  // Show welcome only when no cards, no messages
-            showCards && position == 0 -> TYPE_TRENDING_HEADER  // Show trending header at position 0 when cards are showing
-            hasBlinkCard && position == 1 -> cardType  // Blink/App as a card at position 1 (right after trending header)
-            showCards && position >= (1 + blinkCardCount) && position <= (16 + blinkCardCount) -> cardType  // Regular cards after blink
-            isTyping && position == itemCount - 1 -> TYPE_TYPING_INDICATOR  // Typing indicator at the end
+            !showCards && messages.isEmpty() && position == 0 -> TYPE_WELCOME_HEADER
+            showCards && position == 0 -> TYPE_TRENDING_HEADER
+            hasBlinkCard && position == 1 -> cardType
+            showCards && position >= (1 + blinkCardCount) && position <= (16 + blinkCardCount) -> cardType
+            isTyping && position == itemCount - 1 -> TYPE_TYPING_INDICATOR
             else -> {
-                // Determine if this is a message or blink
-                val messageIndex = if (showCards) {
-                    position - (17 + blinkCardCount)  // Trending header (1) + blink (0 or 1) + cards (16) = 17 or 18
-                } else {
-                    position
-                }
+                val messageIndex = if (showCards) position - (17 + blinkCardCount) else position
                 if (messageIndex >= 0 && messageIndex < messages.size) {
                     val message = messages[messageIndex]
-                    android.util.Log.d("SimpleChatAdapter", "Message at index $messageIndex: messageType=${message.messageType}, hasWebViewData=${message.mcpWebViewData != null}")
-                    if (message.messageType == MessageType.MCP_WEBVIEW) {
-                        android.util.Log.d("SimpleChatAdapter", "Returning TYPE_MCP_WEBVIEW for message at index $messageIndex")
-                        TYPE_MCP_WEBVIEW
-                    } else {
-                        android.util.Log.d("SimpleChatAdapter", "Returning TYPE_MESSAGE for message at index $messageIndex")
-                        TYPE_MESSAGE
-                    }
-                } else {
-                    TYPE_MESSAGE
-                }
+                    if (message.messageType == MessageType.MCP_WEBVIEW) TYPE_MCP_WEBVIEW else TYPE_MESSAGE
+                } else TYPE_MESSAGE
             }
         }
         android.util.Log.e("SimpleChatAdapter", "getItemViewType(position=$position): type=$type (showCards=$showCards, messages.size=${messages.size}, isTyping=$isTyping, hasBlinkCard=$hasBlinkCard)")
@@ -340,7 +339,8 @@ class SimpleChatAdapter(
             }
             is McpAppCardViewHolder -> {
                 // MCP App cards (Apps tab)
-                val cardIndex = position - (1 + blinkCardCount)
+                val isAppsTab = currentCardType == TabType.APPS
+                val cardIndex = if (isAppsTab) position else position - (1 + blinkCardCount)
                 if (cardIndex >= 0 && cardIndex < getCards().size) {
                     val card = getCards()[cardIndex]
                     bindMcpAppCard(holder, card, position)
@@ -360,11 +360,10 @@ class SimpleChatAdapter(
             }
             is McpWebViewHolder -> {
                 // Calculate the message index
+                val isAppsTab = currentCardType == TabType.APPS
                 val messageIndex = if (showCards) {
-                    position - (17 + blinkCardCount)
-                } else {
-                    position
-                }
+                    if (isAppsTab) position - getMcpAppCards().size else position - (17 + blinkCardCount)
+                } else position
                 android.util.Log.e("SimpleChatAdapter", "Binding MCP WebView at position $position, messageIndex=$messageIndex")
                 if (messageIndex >= 0 && messageIndex < messages.size) {
                     val message = messages[messageIndex]
@@ -428,48 +427,77 @@ class SimpleChatAdapter(
             holder.companyName.visibility = View.GONE
             
             // Load blink image/banner from metadata with proper aspect ratio
-            if (card.blinkMetadata != null && card.blinkMetadata.icon.isNotEmpty()) {
+            // Prefer 'image' field (larger banner) over 'icon' field (small logo)
+            val imageUrl = card.blinkMetadata?.image?.takeIf { it.isNotEmpty() } 
+                ?: card.blinkMetadata?.icon?.takeIf { it.isNotEmpty() }
+            
+            android.util.Log.d("SimpleChatAdapter", "Binding blink card: ${card.title}, imageUrl: $imageUrl, icon: ${card.blinkMetadata?.icon}, image: ${card.blinkMetadata?.image}")
+            
+            if (imageUrl != null) {
+                holder.cardBanner.visibility = View.VISIBLE
                 val imageLoader = coil.ImageLoader(context)
-                val request = coil.request.ImageRequest.Builder(context)
-                    .data(card.blinkMetadata.icon)
-                    .target(
-                        onSuccess = { result ->
-                            holder.cardBanner.setImageDrawable(result)
+                
+                // Custom target to handle success and error
+                val target = object : coil.target.Target {
+                    override fun onStart(placeholder: android.graphics.drawable.Drawable?) {
+                        holder.cardBanner.setImageDrawable(placeholder)
+                    }
+                    
+                    override fun onSuccess(result: android.graphics.drawable.Drawable) {
+                        holder.cardBanner.setImageDrawable(result)
+                        
+                        // Calculate proper height based on image aspect ratio
+                        holder.cardBannerContainer.post {
+                            val cardWidth = holder.cardBannerContainer.width
+                            val drawable = result
+                            val imageWidth = drawable.intrinsicWidth
+                            val imageHeight = drawable.intrinsicHeight
                             
-                            // Calculate proper height based on image aspect ratio
-                            holder.cardBannerContainer.post {
-                                val cardWidth = holder.cardBannerContainer.width
-                                val drawable = result
-                                val imageWidth = drawable.intrinsicWidth
-                                val imageHeight = drawable.intrinsicHeight
+                            if (imageWidth > 0 && imageHeight > 0) {
+                                val aspectRatio = imageHeight.toFloat() / imageWidth.toFloat()
+                                var calculatedHeight = (cardWidth * aspectRatio).toInt()
                                 
-                                if (imageWidth > 0 && imageHeight > 0) {
-                                    val aspectRatio = imageHeight.toFloat() / imageWidth.toFloat()
-                                    var calculatedHeight = (cardWidth * aspectRatio).toInt()
-                                    
-                                    // Max height is card width (square)
-                                    if (calculatedHeight > cardWidth) {
-                                        calculatedHeight = cardWidth
-                                    }
-                                    
-                                    val containerParams = holder.cardBannerContainer.layoutParams
-                                    containerParams.height = calculatedHeight
-                                    holder.cardBannerContainer.layoutParams = containerParams
-                                    holder.cardBannerContainer.requestLayout()
+                                // Max height is card width (square)
+                                if (calculatedHeight > cardWidth) {
+                                    calculatedHeight = cardWidth
                                 }
+                                
+                                val containerParams = holder.cardBannerContainer.layoutParams
+                                containerParams.height = calculatedHeight
+                                holder.cardBannerContainer.layoutParams = containerParams
+                                holder.cardBannerContainer.requestLayout()
                             }
                         }
-                    )
+                        android.util.Log.d("SimpleChatAdapter", "Image loaded successfully for: ${card.title}")
+                    }
+                    
+                    override fun onError(error: android.graphics.drawable.Drawable?) {
+                        android.util.Log.e("SimpleChatAdapter", "Failed to load image for ${card.title}, hiding banner")
+                        // Hide banner on error
+                        holder.cardBanner.visibility = View.GONE
+                        holder.cardBannerContainer.post {
+                            val containerParams = holder.cardBannerContainer.layoutParams
+                            containerParams.height = 0
+                            holder.cardBannerContainer.layoutParams = containerParams
+                            holder.cardBannerContainer.requestLayout()
+                        }
+                    }
+                }
+                
+                val request = coil.request.ImageRequest.Builder(context)
+                    .data(imageUrl)
+                    .target(target)
                     .placeholder(R.drawable.stock_photo_banner)
                     .error(R.drawable.stock_photo_banner)
                     .build()
                 imageLoader.enqueue(request)
             } else {
-                // Fallback to square if no image
+                // No image URL available - hide the banner
+                android.util.Log.d("SimpleChatAdapter", "No image URL for blink: ${card.title}")
+                holder.cardBanner.visibility = View.GONE
                 holder.cardBannerContainer.post {
-                    val cardWidth = holder.cardBannerContainer.width
                     val containerParams = holder.cardBannerContainer.layoutParams
-                    containerParams.height = cardWidth
+                    containerParams.height = 0
                     holder.cardBannerContainer.layoutParams = containerParams
                     holder.cardBannerContainer.requestLayout()
                 }
@@ -757,8 +785,8 @@ class SimpleChatAdapter(
     }
 
     private fun bindWelcomeHeader(holder: WelcomeHeaderViewHolder) {
-        holder.welcomeTitle.text = "Welcome to AgentOS"
-        holder.welcomeSubtitle.text = "Your AI-powered launcher"
+        holder.welcomeTitle.text = "SeekerOS"
+        holder.welcomeSubtitle.text = "How can I help you?"
         holder.browsePill.setOnClickListener {
             onBrowseClick?.invoke()
         }
@@ -908,7 +936,13 @@ class SimpleChatAdapter(
             // Create compact inline pill buttons for each tool using TextView for better padding control
             connectedApp.tools.forEach { tool ->
                 val toolButton = android.widget.TextView(context)
-                toolButton.text = tool.title ?: tool.name
+                // Add payment indicator if tool requires payment
+                val displayText = if (tool.payment?.required == true) {
+                    "💰 ${tool.title ?: tool.name}"
+                } else {
+                    tool.title ?: tool.name
+                }
+                toolButton.text = displayText
                 toolButton.setTextColor(android.graphics.Color.WHITE)
                 toolButton.textSize = 13f
                 toolButton.background = context.getDrawable(R.drawable.pill_button_background)
@@ -1012,8 +1046,19 @@ class SimpleChatAdapter(
         val bridge = McpWebViewBridge(
             webView = holder.webView,
             onAction = { actionName, arguments ->
-                android.util.Log.d("McpWebView", "Action triggered: $actionName with args: $arguments")
-                // Could trigger tool invocations or other actions here
+                android.util.Log.e("McpWebView", ">>> Action triggered from widget: $actionName with args: $arguments")
+                
+                // Handle tool calls from the widget (e.g. "callTool:place-pizza-order")
+                if (actionName.startsWith("callTool:")) {
+                    val toolName = actionName.removePrefix("callTool:")
+                    android.util.Log.e("McpWebView", ">>> Tool call detected: $toolName")
+                    android.util.Log.e("McpWebView", ">>> appId: ${webViewData.appId}")
+                    
+                    // Invoke the tool via the callback
+                    onMcpToolInvokeClick?.invoke(webViewData.appId, toolName)
+                } else {
+                    android.util.Log.d("McpWebView", "Unhandled action: $actionName")
+                }
             }
         )
         
@@ -1154,7 +1199,7 @@ class SimpleChatAdapter(
         // Hardcoded test blinks that always show
         val jupiterBlink = BlinkMetadata(
             title = "Buy JUP",
-            icon = "https://ucarecdn.com/09c80208-f27c-45dd-b716-75e1e55832c4/-/preview/1000x981/-/quality/smart/-/format/auto/",
+            icon = "https://ucarecdn.com/32e14bf5-0cfe-4049-81d4-32ab660c80d5/-/preview/400x400/-/quality/smart/-/format/auto/",
             description = "Buy JUP, the token for Jupiter, Solana's leading DEX aggregator.",
             label = "Buy JUP",
             disabled = false,
@@ -1196,7 +1241,7 @@ class SimpleChatAdapter(
         
         val transferBlink = BlinkMetadata(
             title = "Solana Transfer",
-            icon = "https://solana.dial.to/transfer_blink.png",
+            icon = "https://ucarecdn.com/8bcc4664-01b2-4a5e-94ce-87066c57c89e/-/preview/400x400/-/quality/smart/-/format/auto/",
             description = "Send SOL or SPL tokens to any Solana wallet address.",
             label = "Send",
             disabled = false,
@@ -1231,9 +1276,95 @@ class SimpleChatAdapter(
             image = null
         )
         
+        val donateBlink = BlinkMetadata(
+            title = "Donate SOL",
+            icon = "https://ucarecdn.com/7911cf71-504c-4127-8a95-e3b661a65a04/-/preview/400x400/-/quality/smart/-/format/auto/",
+            description = "Support the Solana ecosystem with a donation.",
+            label = "Donate",
+            disabled = false,
+            links = BlinkLinks(
+                actions = listOf(
+                    BlinkLinkedAction(
+                        href = "/donate/0.1",
+                        label = "0.1 SOL",
+                        parameters = null
+                    ),
+                    BlinkLinkedAction(
+                        href = "/donate/0.5",
+                        label = "0.5 SOL",
+                        parameters = null
+                    ),
+                    BlinkLinkedAction(
+                        href = "/donate/1",
+                        label = "1 SOL",
+                        parameters = null
+                    ),
+                    BlinkLinkedAction(
+                        href = "/donate/{amount}",
+                        label = "Custom Amount",
+                        parameters = listOf(
+                            BlinkParameter(
+                                name = "amount",
+                                label = "Enter custom SOL amount",
+                                required = false
+                            )
+                        )
+                    )
+                )
+            ),
+            error = null,
+            actionUrl = "https://solana.dial.to/donate",
+            parameters = null,
+            image = null
+        )
+        
+        val stakeBlink = BlinkMetadata(
+            title = "Stake SOL",
+            icon = "https://ucarecdn.com/449294c4-1679-461d-8b3a-e0343eb3a99a/-/preview/400x400/-/quality/smart/-/format/auto/",
+            description = "Stake your SOL tokens and earn rewards.",
+            label = "Stake",
+            disabled = false,
+            links = BlinkLinks(
+                actions = listOf(
+                    BlinkLinkedAction(
+                        href = "/stake/1",
+                        label = "1 SOL",
+                        parameters = null
+                    ),
+                    BlinkLinkedAction(
+                        href = "/stake/5",
+                        label = "5 SOL",
+                        parameters = null
+                    ),
+                    BlinkLinkedAction(
+                        href = "/stake/10",
+                        label = "10 SOL",
+                        parameters = null
+                    ),
+                    BlinkLinkedAction(
+                        href = "/stake/{amount}",
+                        label = "Custom Amount",
+                        parameters = listOf(
+                            BlinkParameter(
+                                name = "amount",
+                                label = "Enter SOL amount to stake",
+                                required = false
+                            )
+                        )
+                    )
+                )
+            ),
+            error = null,
+            actionUrl = "https://solana.dial.to/stake",
+            parameters = null,
+            image = null
+        )
+        
         return listOf(
             convertBlinkToCard(jupiterBlink),
-            convertBlinkToCard(transferBlink)
+            convertBlinkToCard(transferBlink),
+            convertBlinkToCard(donateBlink),
+            convertBlinkToCard(stakeBlink)
         )
     }
     
@@ -1246,178 +1377,38 @@ class SimpleChatAdapter(
     }
     
     private fun getBlinkCards(): List<SubtleCard> {
-        // Start with hardcoded blinks
-        val hardcodedBlinks = getHardcodedBlinkCards()
+        // Only show dynamic blinks (fetched from real APIs)
+        // Hardcoded blinks are disabled to avoid confusion with real ones
         
-        // Add regular cards
-        val regularCards = listOf(
-            SubtleCard(
-                title = "Smart Apps",
-                subtitle = "AI-powered app launcher",
-                category = "Productivity",
-                description = "Launch your most used apps with intelligent suggestions based on your usage patterns.",
-                imageRes = R.drawable.ic_apps,
-                actionButtonText = "Launch",
-                learnMoreAction = { /* Show app details */ },
-                actionButtonAction = { /* Open apps */ }
-            ),
-            SubtleCard(
-                title = "System Settings",
-                subtitle = "Quick system access",
-                category = "System",
-                description = "Access system settings, WiFi, Bluetooth, and other device configurations instantly.",
-                imageRes = R.drawable.ic_settings,
-                actionButtonText = "Open",
-                learnMoreAction = { /* Show settings details */ },
-                actionButtonAction = { /* Open settings */ }
-            ),
-            SubtleCard(
-                title = "Global Search",
-                subtitle = "Find anything instantly",
-                category = "Search",
-                description = "Search across apps, files, contacts, and web content with AI-enhanced results.",
-                imageRes = R.drawable.ic_search,
-                actionButtonText = "Search",
-                learnMoreAction = { /* Show search details */ },
-                actionButtonAction = { /* Open search */ }
-            ),
-            SubtleCard(
-                title = "Phone & Contacts",
-                subtitle = "Communication hub",
-                category = "Communication",
-                description = "Make calls, send messages, and manage your contacts with smart suggestions.",
-                imageRes = R.drawable.ic_phone,
-                actionButtonText = "Call",
-                learnMoreAction = { /* Show phone details */ },
-                actionButtonAction = { /* Open phone */ }
-            ),
-            SubtleCard(
-                title = "Conversation History",
-                subtitle = "Your chat archive",
-                category = "History",
-                description = "View and manage your conversation history with AI assistants and agents.",
-                imageRes = R.drawable.ic_history,
-                actionButtonText = "View",
-                learnMoreAction = { /* Show history details */ },
-                actionButtonAction = { /* This will be handled by the parent activity */ }
-            ),
-            SubtleCard(
-                title = "Recent Activity",
-                subtitle = "Quick access to recent items",
-                category = "Recent",
-                description = "Access recently used apps, files, and actions for faster productivity.",
-                imageRes = R.drawable.ic_apps,
-                actionButtonText = "Open",
-                learnMoreAction = { /* Show recent details */ },
-                actionButtonAction = { /* This will be handled by the parent activity */ }
-            ),
-            SubtleCard(
-                title = "Contact Manager",
-                subtitle = "Smart contact organization",
-                category = "Contacts",
-                description = "Organize and manage your contacts with AI-powered categorization and search.",
-                imageRes = R.drawable.ic_phone,
-                actionButtonText = "Manage",
-                learnMoreAction = { /* Show contacts details */ },
-                actionButtonAction = { /* Open contacts */ }
-            ),
-            SubtleCard(
-                title = "Camera & Photos",
-                subtitle = "Visual content creation",
-                category = "Media",
-                description = "Take photos, record videos, and access your gallery with smart organization.",
-                imageRes = R.drawable.ic_search,
-                actionButtonText = "Capture",
-                learnMoreAction = { /* Show camera details */ },
-                actionButtonAction = { /* Open camera */ }
-            ),
-            SubtleCard(
-                title = "Media Gallery",
-                subtitle = "Your visual memories",
-                category = "Media",
-                description = "Browse and organize your photos and videos with AI-powered tagging.",
-                imageRes = R.drawable.ic_apps,
-                actionButtonText = "Browse",
-                learnMoreAction = { /* Show gallery details */ },
-                actionButtonAction = { /* Open gallery */ }
-            ),
-            SubtleCard(
-                title = "Music Player",
-                subtitle = "Audio entertainment",
-                category = "Entertainment",
-                description = "Play music, podcasts, and audio content with smart recommendations.",
-                imageRes = R.drawable.ic_settings,
-                actionButtonText = "Play",
-                learnMoreAction = { /* Show music details */ },
-                actionButtonAction = { /* Open music */ }
-            ),
-            SubtleCard(
-                title = "Navigation & Maps",
-                subtitle = "Location services",
-                category = "Navigation",
-                description = "Get directions, find places, and navigate with real-time traffic updates.",
-                imageRes = R.drawable.ic_search,
-                actionButtonText = "Navigate",
-                learnMoreAction = { /* Show maps details */ },
-                actionButtonAction = { /* Open maps */ }
-            ),
-            SubtleCard(
-                title = "Weather Forecast",
-                subtitle = "Current conditions",
-                category = "Weather",
-                description = "Get current weather conditions and forecasts for your location.",
-                imageRes = R.drawable.ic_apps,
-                actionButtonText = "Check",
-                learnMoreAction = { /* Show weather details */ },
-                actionButtonAction = { /* Open weather */ }
-            ),
-            SubtleCard(
-                title = "Calendar & Events",
-                subtitle = "Schedule management",
-                category = "Productivity",
-                description = "Manage your schedule, events, and reminders with smart suggestions.",
-                imageRes = R.drawable.ic_settings,
-                actionButtonText = "View",
-                learnMoreAction = { /* Show calendar details */ },
-                actionButtonAction = { /* Open calendar */ }
-            ),
-            SubtleCard(
-                title = "Notes & Documents",
-                subtitle = "Text and document editor",
-                category = "Productivity",
-                description = "Create, edit, and organize notes and documents with AI assistance.",
-                imageRes = R.drawable.ic_search,
-                actionButtonText = "Create",
-                learnMoreAction = { /* Show notes details */ },
-                actionButtonAction = { /* Open notes */ }
-            ),
-            SubtleCard(
-                title = "File Manager",
-                subtitle = "Storage organization",
-                category = "Files",
-                description = "Browse, organize, and manage your files and folders efficiently.",
-                imageRes = R.drawable.ic_apps,
-                actionButtonText = "Browse",
-                learnMoreAction = { /* Show files details */ },
-                actionButtonAction = { /* Open files */ }
-            ),
-            SubtleCard(
-                title = "Web Browser",
-                subtitle = "Internet access",
-                category = "Web",
-                description = "Browse the web with AI-enhanced search and smart bookmarking.",
-                imageRes = R.drawable.ic_search,
-                actionButtonText = "Browse",
-                learnMoreAction = { /* Show browser details */ },
-                actionButtonAction = { /* Open browser */ }
-            )
-        )
+        // Convert dynamic blinks to cards, filtering out ones without valid images
+        val dynamicBlinkCardsList = dynamicBlinkCards
+            .filter { metadata ->
+                // Only show blinks that have a valid icon or image URL
+                val hasValidImage = (metadata.icon.isNotEmpty() || (metadata.image != null && metadata.image.isNotEmpty()))
+                if (!hasValidImage) {
+                    android.util.Log.d("SimpleChatAdapter", "Filtering out blink without image: ${metadata.title}")
+                }
+                hasValidImage
+            }
+            .map { convertBlinkToCard(it) }
         
-        // Convert dynamic blinks to cards
-        val dynamicBlinkCardsList = dynamicBlinkCards.map { convertBlinkToCard(it) }
+        android.util.Log.d("SimpleChatAdapter", "Showing ${dynamicBlinkCardsList.size} dynamic blinks (from ${dynamicBlinkCards.size} total)")
         
-        // Combine hardcoded blinks, dynamic blinks, then regular cards
-        return hardcodedBlinks + dynamicBlinkCardsList + regularCards
+        return dynamicBlinkCardsList
+    }
+    
+    /**
+     * Normalize action URL by removing query parameters for comparison
+     * This helps catch duplicates where the base URL is the same but query params differ
+     */
+    private fun normalizeActionUrl(url: String): String {
+        return try {
+            val uri = java.net.URI(url)
+            "${uri.scheme}://${uri.host}${uri.path}".lowercase()
+        } catch (e: Exception) {
+            // If parsing fails, just lowercase the URL
+            url.lowercase()
+        }
     }
     
     private fun getMcpAppCards(): List<SubtleCard> {
@@ -1458,19 +1449,22 @@ class SimpleChatAdapter(
     }
 
     override fun getItemCount(): Int {
+        val isAppsTab = currentCardType == TabType.APPS
         val hasBlinkCard = showCards && blinkCard != null
         val blinkCardCount = if (hasBlinkCard) 1 else 0
         
-        // 1 trending header + 2 hardcoded blinks + N dynamic blinks + 14 regular cards
-        // + optional dynamic blink card = variable cards total
-        val dynamicBlinkCount = if (showCards) dynamicBlinkCards.size else 0
-        val baseCardsCount = 17 // 1 trending header + 2 hardcoded blinks + 14 regular cards
-        val totalCardsCount = baseCardsCount + dynamicBlinkCount + blinkCardCount
+        val cardsCount = if (showCards) {
+            if (isAppsTab) {
+                getMcpAppCards().size
+            } else {
+                // Blinks tab: trending header (1) + filtered dynamic blinks + optional single blinkCard
+                val filteredBlinkCards = getBlinkCards() // This returns filtered dynamic blinks
+                1 + filteredBlinkCards.size + blinkCardCount
+            }
+        } else if (messages.isEmpty()) 1 else 0
         
-        val count = messages.size + 
-                   (if (showCards) totalCardsCount else if (messages.isEmpty()) 1 else 0) + 
-                   (if (isTyping) 1 else 0) // Add 1 for typing indicator
-        android.util.Log.e("SimpleChatAdapter", "getItemCount() returning: $count (messages.size=${messages.size}, showCards=$showCards, isTyping=$isTyping, hasBlinkCard=$hasBlinkCard, dynamicBlinkCount=$dynamicBlinkCount)")
+        val count = messages.size + cardsCount + (if (isTyping) 1 else 0)
+        android.util.Log.e("SimpleChatAdapter", "getItemCount() returning: $count (messages.size=${messages.size}, showCards=$showCards, isTyping=$isTyping, hasBlinkCard=$hasBlinkCard, blinkCardsCount=${if (isAppsTab) 0 else getBlinkCards().size})")
         return count
     }
 
@@ -1514,8 +1508,21 @@ class SimpleChatAdapter(
     }
     
     fun addDynamicBlinkCard(metadata: BlinkMetadata) {
-        dynamicBlinkCards.add(metadata)
-        notifyDataSetChanged()
+        // Normalize URLs for comparison (ignore query params)
+        val normalizedUrl = normalizeActionUrl(metadata.actionUrl)
+        
+        // Check against existing dynamic blinks
+        val isDuplicate = dynamicBlinkCards.any { 
+            normalizeActionUrl(it.actionUrl) == normalizedUrl 
+        }
+        
+        if (!isDuplicate) {
+            android.util.Log.d("SimpleChatAdapter", "Adding dynamic blink: ${metadata.title} - icon: ${metadata.icon}, image: ${metadata.image}")
+            dynamicBlinkCards.add(metadata)
+            notifyDataSetChanged()
+        } else {
+            android.util.Log.d("SimpleChatAdapter", "Skipping duplicate blink: ${metadata.title} (actionUrl: ${metadata.actionUrl})")
+        }
     }
     
     fun clearDynamicBlinkCards() {

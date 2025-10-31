@@ -256,7 +256,7 @@ class BrowserUIManager(
             (messageInput.parent as? LinearLayout)?.background = ContextCompat.getDrawable(context, android.R.attr.colorBackground)
             
             // Reset input hint and restore multi-line behavior
-            messageInput.hint = "Search apps or type message..."
+            messageInput.hint = "Search apps or ask a question"
             messageInput.textSize = 16f
             messageInput.maxLines = 3
             messageInput.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES

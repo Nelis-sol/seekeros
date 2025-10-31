@@ -370,9 +370,11 @@ class McpWebViewBridge(
     @JavascriptInterface
     fun callTool(toolName: String, argsJson: String) {
         try {
+            Log.e(TAG, "=" .repeat(80))
             Log.e(TAG, ">>> callTool CALLED FROM WIDGET!")
             Log.e(TAG, "  - toolName: $toolName")
             Log.e(TAG, "  - argsJson: $argsJson")
+            Log.e(TAG, "=" .repeat(80))
             
             val argsObject = JSONObject(argsJson)
             val args = mutableMapOf<String, Any>()
@@ -382,6 +384,7 @@ class McpWebViewBridge(
             }
             
             webView.post {
+                Log.e(TAG, ">>> Invoking onAction callback: callTool:$toolName")
                 onAction("callTool:$toolName", args)
             }
             
